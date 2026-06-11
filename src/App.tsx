@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The resumelint Authors
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Chip } from "./components/ui/Chip.tsx";
 import { DropZone } from "./components/DropZone";
 import { Result } from "./components/Result";
+import { JdMatch } from "./components/features/JdMatch.tsx";
 import { runCascade } from "./lib/heuristics";
 import type { CascadeResult } from "./lib/heuristics/types.ts";
 import {
@@ -16,6 +17,7 @@ import {
   trackParseCompleted,
   trackParseFailed,
 } from "./lib/analytics.ts";
+import { extractJdTerms, computeCoverage } from "./lib/jd-match";
 
 type ParseState =
   | { phase: "idle" }
@@ -38,6 +40,17 @@ function formatBytes(n: number): string {
 
 export default function App() {
   const [state, setState] = useState<ParseState>({ phase: "idle" });
+  const [jdText, setJdText] = useState("");
+
+  const jdMatch = useMemo(() => {
+    if (state.phase !== "done") return null;
+    const trimmed = jdText.trim();
+    if (trimmed.length === 0) return null;
+    const extracted = extractJdTerms(trimmed);
+    if (extracted.all.length === 0) return null;
+    const coverage = computeCoverage(state.result.parsed, extracted.all);
+    return { extracted, coverage };
+  }, [jdText, state]);
 
   const handleFile = useCallback(async (file: File) => {
     trackFileAccepted(file.size);
@@ -144,6 +157,31 @@ export default function App() {
           bytes={state.bytes}
           onReset={reset}
         />
+      )}
+
+      {state.phase === "done" && (
+        <section className="flex flex-col gap-3 rounded-xl border border-border-light bg-surface-card p-5 shadow-sm">
+          <div className="flex flex-col gap-1">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-content-muted">
+              Paste a job description
+            </h2>
+            <p className="max-w-prose text-xs text-content-tertiary">
+              We'll lint your resume against the JD's skills and key phrases.
+              Diagnostic, not tailoring — your JD text stays in this browser
+              tab.
+            </p>
+          </div>
+          <textarea
+            value={jdText}
+            onChange={(e) => setJdText(e.target.value)}
+            placeholder="Paste the job description here…"
+            className="min-h-[160px] resize-y rounded-lg border border-border-light bg-surface-subtle p-3 text-sm leading-relaxed text-content-primary placeholder:text-content-muted focus:border-border focus:outline-none"
+          />
+        </section>
+      )}
+
+      {jdMatch && (
+        <JdMatch coverage={jdMatch.coverage} terms={jdMatch.extracted.all} />
       )}
 
       <footer className="mt-auto flex flex-col gap-2 border-t border-neutral-200 pt-6 text-xs text-neutral-600 dark:border-neutral-800 dark:text-neutral-400">
