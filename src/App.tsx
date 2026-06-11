@@ -43,9 +43,9 @@ export default function App() {
   const [jdText, setJdText] = useState("");
 
   const jdMatch = useMemo(() => {
-    if (state.phase !== "done") return null;
     const trimmed = jdText.trim();
     if (trimmed.length === 0) return null;
+    if (state.phase !== "done") return null;
     const extracted = extractJdTerms(trimmed);
     if (extracted.all.length === 0) return null;
     const coverage = computeCoverage(state.result.parsed, extracted.all);
@@ -159,26 +159,30 @@ export default function App() {
         />
       )}
 
-      {state.phase === "done" && (
-        <section className="flex flex-col gap-3 rounded-xl border border-border-light bg-surface-card p-5 shadow-sm">
-          <div className="flex flex-col gap-1">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-content-muted">
-              Paste a job description
-            </h2>
-            <p className="max-w-prose text-xs text-content-tertiary">
-              We'll lint your resume against the JD's skills and key phrases.
-              Diagnostic, not tailoring — your JD text stays in this browser
-              tab.
-            </p>
-          </div>
-          <textarea
-            value={jdText}
-            onChange={(e) => setJdText(e.target.value)}
-            placeholder="Paste the job description here…"
-            className="min-h-[160px] resize-y rounded-lg border border-border-light bg-surface-subtle p-3 text-sm leading-relaxed text-content-primary placeholder:text-content-muted focus:border-border focus:outline-none"
-          />
-        </section>
-      )}
+      <section className="flex flex-col gap-3 rounded-xl border border-border-light bg-surface-card p-5 shadow-sm">
+        <div className="flex flex-col gap-1">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-content-muted">
+            Paste a job description
+          </h2>
+          <p className="max-w-prose text-xs text-content-tertiary">
+            We'll lint your resume against the JD's skills and key phrases.
+            Diagnostic, not tailoring — your JD text stays in this browser
+            tab.
+          </p>
+        </div>
+        <textarea
+          value={jdText}
+          onChange={(e) => setJdText(e.target.value)}
+          placeholder="Paste the job description here…"
+          className="min-h-[160px] resize-y rounded-lg border border-border-light bg-surface-subtle p-3 text-sm leading-relaxed text-content-primary placeholder:text-content-muted focus:border-border focus:outline-none"
+        />
+        {jdText.trim().length > 0 && state.phase !== "done" && (
+          <p className="text-xs text-content-muted">
+            Drop a resume above to see what the JD asks for that's not in
+            your resume.
+          </p>
+        )}
+      </section>
 
       {jdMatch && (
         <JdMatch coverage={jdMatch.coverage} terms={jdMatch.extracted.all} />
