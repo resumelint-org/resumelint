@@ -222,8 +222,14 @@ export function extractJdTerms(
 /**
  * Walk the JD line by line. A line that contains a boilerplate anchor is
  * dropped, along with the run of non-blank lines that follow (we treat a
- * blank line as the end of a boilerplate block). This is intentionally
- * conservative: it'd rather under-strip than swallow real skill copy.
+ * blank line as the end of a boilerplate block).
+ *
+ * Tradeoff: matching is line-granular, so a line that mixes an anchor
+ * with real skill copy (e.g. "Salary range: $100k. We use Rust and Go.")
+ * is over-stripped — the real skills are lost with the boilerplate. Rare
+ * in practice (anchors usually live on their own line or start a block),
+ * and worth the simplicity for v1. A sentence-granular pass would fix
+ * this if it shows up in real JDs.
  */
 export function stripBoilerplate(raw: string): string {
   const normalized = raw.replace(/\r\n?/g, "\n");
@@ -239,12 +245,10 @@ export function stripBoilerplate(raw: string): string {
       continue;
     }
     if (line === "") {
-      if (skipping) {
-        skipping = false;
-        kept.push("");
-      } else {
-        kept.push("");
-      }
+      // A blank line ends any active boilerplate block, and is itself kept
+      // so paragraph boundaries survive into the matched body.
+      if (skipping) skipping = false;
+      kept.push("");
       continue;
     }
     if (skipping) continue;
