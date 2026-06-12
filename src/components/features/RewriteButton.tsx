@@ -118,7 +118,9 @@ export function RewriteButton({ bullet }: RewriteButtonProps) {
       )}
 
       {status.kind === "error" && (
-        <p className="text-[11px] text-feedback-error-text">{status.message}</p>
+        <p role="alert" className="text-[11px] text-feedback-error-text">
+          {status.message}
+        </p>
       )}
     </div>
   );
@@ -147,7 +149,14 @@ function LoadingPanel({ progress }: { progress: ProgressUpdate }) {
         <span>Loading the bullet-rewrite model (~1.2GB, one-time download)</span>
         <span className="font-mono">{pct}%</span>
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-base">
+      <div
+        role="progressbar"
+        aria-valuenow={pct}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label="Model download progress"
+        className="h-1.5 w-full overflow-hidden rounded-full bg-surface-base"
+      >
         <div
           className="h-full bg-feedback-success-icon transition-all"
           style={{ width: `${pct}%` }}
