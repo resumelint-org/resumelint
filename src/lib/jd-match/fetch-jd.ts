@@ -4,7 +4,12 @@
 // ATS public JSON API clients — fetch a job description as plaintext.
 // These APIs are free, unauthenticated, and legally safe.
 
-export type AtsPlatform = "greenhouse" | "lever" | "workable" | "recruitee";
+export type AtsPlatform =
+  | "greenhouse"
+  | "lever"
+  | "workable"
+  | "recruitee"
+  | "ashby";
 
 interface ParsedAtsUrl {
   platform: AtsPlatform;
@@ -19,7 +24,8 @@ export function parseAtsUrl(url: string): ParsedAtsUrl | null {
     parseGreenhouseUrl(url) ||
     parseLeverUrl(url) ||
     parseWorkableUrl(url) ||
-    parseRecruiteeUrl(url)
+    parseRecruiteeUrl(url) ||
+    parseAshbyUrl(url)
   );
 }
 
@@ -48,6 +54,18 @@ function parseRecruiteeUrl(url: string): ParsedAtsUrl | null {
   const match = url.match(/([\w-]+)\.recruitee\.com\/o\/([\w-]+)/);
   return match
     ? { platform: "recruitee", company: match[1], jobId: match[2] }
+    : null;
+}
+
+// Ashby job-board URLs are `jobs.ashbyhq.com/{token}/{jobId}` where `token`
+// is the company's job-board token (the slug we pass to the public API)
+// and `jobId` is a UUID identifying the posting.
+function parseAshbyUrl(url: string): ParsedAtsUrl | null {
+  const match = url.match(
+    /jobs\.ashbyhq\.com\/([\w-]+)\/([\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12})/i,
+  );
+  return match
+    ? { platform: "ashby", company: match[1], jobId: match[2] }
     : null;
 }
 
@@ -159,6 +177,32 @@ async function fetchRecruiteeJob(
   };
 }
 
+// Ashby job-board API: a single GET returns the company's full posting list.
+// Public, no auth, sends `Access-Control-Allow-Origin: *` so this is safe to
+// call directly from the browser. Posting shape (relevant fields only):
+//   { jobBoard: { name }, jobPostings: [{ id, title, descriptionHtml }] }
+async function fetchAshbyJob(
+  token: string,
+  jobId: string,
+): Promise<FetchedJd> {
+  const resp = await fetchWithTimeout(
+    `https://api.ashbyhq.com/posting-api/job-board/${token}`,
+  );
+  if (!resp.ok) throw new Error(`Ashby API ${resp.status}`);
+  const data = await resp.json();
+
+  const posting = data.jobPostings?.find(
+    (p: { id: string }) => p.id === jobId,
+  );
+  if (!posting) throw new Error("Job not found in Ashby listing");
+
+  return {
+    title: posting.title,
+    company: data.jobBoard?.name || token,
+    descriptionHtml: posting.descriptionHtml,
+  };
+}
+
 // ─── HTML → plaintext ─────────────────────────────────────────────────────────
 
 export function htmlToPlaintext(html: string): string {
@@ -203,6 +247,7 @@ const FETCHERS: Record<
   lever: fetchLeverJob,
   workable: fetchWorkableJob,
   recruitee: fetchRecruiteeJob,
+  ashby: fetchAshbyJob,
 };
 
 // ─── Public API ───────────────────────────────────────────────────────────────

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 The resumelint Authors
 
-import { describe, it, expect } from "vitest";
-import { parseAtsUrl, htmlToPlaintext } from "./fetch-jd.ts";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { parseAtsUrl, htmlToPlaintext, fetchJdFromUrl } from "./fetch-jd.ts";
 
 describe("parseAtsUrl", () => {
   it("parses a Greenhouse URL", () => {
@@ -47,6 +47,23 @@ describe("parseAtsUrl", () => {
       company: "acmecorp",
       jobId: "senior-software-engineer",
     });
+  });
+
+  it("parses an Ashby URL", () => {
+    const result = parseAtsUrl(
+      "https://jobs.ashbyhq.com/acmecorp/12345678-90ab-cdef-1234-567890abcdef",
+    );
+    expect(result).toEqual({
+      platform: "ashby",
+      company: "acmecorp",
+      jobId: "12345678-90ab-cdef-1234-567890abcdef",
+    });
+  });
+
+  it("does not match an Ashby URL with a non-UUID jobId", () => {
+    expect(
+      parseAtsUrl("https://jobs.ashbyhq.com/acmecorp/not-a-uuid"),
+    ).toBeNull();
   });
 
   it("returns null for a non-ATS URL", () => {
@@ -104,5 +121,86 @@ describe("htmlToPlaintext", () => {
     const text = htmlToPlaintext(html);
     expect(text.startsWith("A")).toBe(true);
     expect(text).not.toMatch(/\n{3,}/);
+  });
+});
+
+describe("fetchJdFromUrl — Ashby", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("hits the public job-board API and returns the matched posting as plaintext", async () => {
+    const targetId = "12345678-90ab-cdef-1234-567890abcdef";
+    const fakeResponse = {
+      jobBoard: { name: "Acme Corp" },
+      jobPostings: [
+        {
+          id: "00000000-0000-0000-0000-000000000000",
+          title: "Other Role",
+          descriptionHtml: "<p>not this one</p>",
+        },
+        {
+          id: targetId,
+          title: "Staff Engineer",
+          descriptionHtml: "<p>Build distributed systems with Kubernetes.</p>",
+        },
+      ],
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toBe(
+        "https://api.ashbyhq.com/posting-api/job-board/acmecorp",
+      );
+      return new Response(JSON.stringify(fakeResponse), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchJdFromUrl(
+      `https://jobs.ashbyhq.com/acmecorp/${targetId}`,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).not.toBeNull();
+    expect(result!.source).toBe("ashby");
+    expect(result!.title).toBe("Staff Engineer");
+    expect(result!.company).toBe("Acme Corp");
+    expect(result!.text).toContain("Build distributed systems with Kubernetes.");
+    expect(result!.text).not.toMatch(/<[^>]+>/);
+  });
+
+  it("returns null when the posting id isn't in the board listing", async () => {
+    const fakeResponse = {
+      jobBoard: { name: "Acme Corp" },
+      jobPostings: [
+        {
+          id: "11111111-1111-1111-1111-111111111111",
+          title: "Unrelated Role",
+          descriptionHtml: "<p>nope</p>",
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify(fakeResponse), { status: 200 }),
+      ),
+    );
+
+    const result = await fetchJdFromUrl(
+      "https://jobs.ashbyhq.com/acmecorp/22222222-2222-2222-2222-222222222222",
+    );
+    expect(result).toBeNull();
+  });
+
+  it("returns null when the API call fails (non-2xx)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 404 })),
+    );
+
+    const result = await fetchJdFromUrl(
+      "https://jobs.ashbyhq.com/missingco/12345678-90ab-cdef-1234-567890abcdef",
+    );
+    expect(result).toBeNull();
   });
 });
