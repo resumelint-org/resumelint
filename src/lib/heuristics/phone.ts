@@ -103,6 +103,9 @@ const COUNTRY_TO_REGION: Record<string, CountryCode> = {
  *
  * @param location The raw location string, e.g. "San Francisco, CA" or
  *                 "London, United Kingdom". May be undefined/empty.
+ *                 Three-part "City, State, Country" strings (e.g. "Bengaluru,
+ *                 Karnataka, India") do not map — INTL_LOCATION_RE captures
+ *                 only the first comma-segment as the country tail.
  * @returns An ISO 3166-1 alpha-2 CountryCode, or `undefined` if unmapped.
  */
 export function regionFromLocation(
@@ -177,9 +180,9 @@ export function normalizePhone(
  *   2. `/\+\d/` — catches E.164 international numbers (`+44 …`, `+1 …`)
  *      whose space-separated groups fall outside PHONE_RE's US-biased pattern.
  *
- * For non-US regions the pre-filter is relaxed to any 6+ digit sequence,
- * because national-format numbers (e.g. UK `020 7946 0958`, India `098765 43210`)
- * do not match PHONE_RE and carry no `+` prefix.
+ * For non-US regions the pre-filter is relaxed to any 7+ total digits across
+ * the string, because national-format numbers (e.g. UK `020 7946 0958`,
+ * India `098765 43210`) do not match PHONE_RE and carry no `+` prefix.
  */
 function mightHavePhone(text: string, region: CountryCode): boolean {
   PHONE_RE.lastIndex = 0;
