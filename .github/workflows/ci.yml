@@ -45,7 +45,11 @@ jobs:
           # fallow emits one SARIF run per sub-analysis (dead-code/health/dupes)
           # with an empty category; CodeQL rejects multiple runs sharing a
           # category, so stamp each run with a distinct automationDetails.id.
-          node -e 'const fs=require("fs");const f="fallow.sarif";const j=JSON.parse(fs.readFileSync(f,"utf8"));j.runs.forEach((r,i)=>{r.automationDetails={...(r.automationDetails||{}),id:`fallow/${i}/`}});fs.writeFileSync(f,JSON.stringify(j))'
+          # CodeQL also rejects any result lacking a physical location
+          # ("locationFromSarifResult: expected at least one location"); some
+          # fallow findings (project-wide health/dupe summaries) carry no
+          # location, so drop those results before upload.
+          node -e 'const fs=require("fs");const f="fallow.sarif";const j=JSON.parse(fs.readFileSync(f,"utf8"));j.runs.forEach((r,i)=>{r.automationDetails={...(r.automationDetails||{}),id:`fallow/${i}/`};if(Array.isArray(r.results))r.results=r.results.filter(x=>Array.isArray(x.locations)&&x.locations.length>0)});fs.writeFileSync(f,JSON.stringify(j))'
       - name: upload fallow SARIF
         uses: github/codeql-action/upload-sarif@v3
         with:
