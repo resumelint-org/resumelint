@@ -136,4 +136,21 @@ describe("htmlToPlaintext", () => {
     const text = htmlToPlaintext("<p>bad &#1114112; ref</p>");
     expect(text).toContain("&#1114112;");
   });
+
+  it("drops non-whitespace control-character references (&#0;, &#7;)", () => {
+    // Null and BEL would inject invisible bytes into the matched plaintext;
+    // they are stripped, not decoded and not left as raw `&#…;`.
+    const text = htmlToPlaintext("<p>a&#0;b&#7;c</p>");
+    expect(text).toBe("abc");
+    expect(text).not.toContain("&#");
+  });
+
+  it("decodes whitespace control references (&#13;/&#10;) without leaking", () => {
+    // CR/LF are legitimate whitespace — decoded then normalized by the
+    // line-collapse pass, never left as a raw `&#13;` fragment.
+    const text = htmlToPlaintext("<p>line1&#13;&#10;line2</p>");
+    expect(text).not.toContain("&#");
+    expect(text).toContain("line1");
+    expect(text).toContain("line2");
+  });
 });

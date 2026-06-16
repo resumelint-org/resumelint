@@ -169,6 +169,11 @@ async function fetchRecruiteeJob(
  *
  * Code point 0xA0 (non-breaking space) is folded to a regular space so numeric
  * `&#160;` / `&#xA0;` references match the named `&nbsp;` decode path.
+ *
+ * Non-whitespace C0 control characters and DEL (e.g. `&#0;`, `&#7;`, `&#8;`) are
+ * dropped — decoding them would inject invisible control bytes into the matched
+ * plaintext. Tab / LF / CR are kept as legitimate whitespace (the line-collapse
+ * pass downstream normalizes them).
  */
 function decodeCodePoint(original: string, codePoint: number): string {
   if (
@@ -180,6 +185,15 @@ function decodeCodePoint(original: string, codePoint: number): string {
     return original;
   }
   if (codePoint === 0xa0) return " ";
+  if (
+    (codePoint < 0x20 &&
+      codePoint !== 0x09 &&
+      codePoint !== 0x0a &&
+      codePoint !== 0x0d) ||
+    codePoint === 0x7f
+  ) {
+    return "";
+  }
   return String.fromCodePoint(codePoint);
 }
 
