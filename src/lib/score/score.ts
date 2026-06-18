@@ -39,8 +39,9 @@ export const WEIGHTS = {
  *
  * Changelog:
  * - 1.0 (2026-04-28): initial release.
+ * - 1.1 (2026-06-17): separator-less month-year date ranges now anchor experience entries (#119).
  */
-export const ATS_SCORE_ALGO_VERSION = "1.0";
+export const ATS_SCORE_ALGO_VERSION = "1.1";
 
 // ── Shared scoring rules ────────────────────────────────────────────────────
 //
