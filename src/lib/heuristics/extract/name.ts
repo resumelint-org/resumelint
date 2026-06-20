@@ -211,6 +211,40 @@ function scoreNameCandidate(args: {
 }
 
 /**
+ * Structural eligibility filter for one candidate line. Returns the split words
+ * if the line could be a name, or null if it is rejected outright. A two-word
+ * minimum is a precision guard — a lone top line is usually `Profile` / `Resume`
+ * / a brand or section header, not a mononym. A single-word candidate is
+ * admitted ONLY through the guarded `looksLikeMononymName` path AND only as the
+ * first eligible line (#107): `hasEligible` (true once an earlier line was
+ * accepted) rejects any later mononym, so a two-word name on the same résumé
+ * always wins the lead slot first. Predicate order is identical to the inline
+ * version it replaced — behavior-preserving.
+ */
+function nameCandidateWords(
+  text: string,
+  line: PdfLine,
+  hasEligible: boolean,
+  maxFontSize: number,
+): string[] | null {
+  if (!text || text.length > 60) return null;
+  if (/\d/.test(text)) return null;
+  if (text.includes("@")) return null;
+  const words = text.split(/\s+/);
+  if (words.length === 1) {
+    if (hasEligible) return null;
+    if (!looksLikeMononymName(text, line, maxFontSize)) return null;
+  } else if (words.length > 5) {
+    return null;
+  }
+  const letterRatio =
+    text.replace(/[^A-Za-z]/g, "").length / Math.max(text.length, 1);
+  if (letterRatio < 0.7) return null;
+  if (looksLikeDocTitleBoilerplate(words)) return null;
+  return words;
+}
+
+/**
  * Resume names almost always appear at the very top, in the largest font, with
  * 2–4 words that are all letters (plus maybe a period or hyphen). Score:
  *   +0.4 first line of profile
@@ -253,27 +287,13 @@ export function extractName(
   const candidates = buildNameCandidates(profile.lines);
 
   for (const { text, line, idx } of candidates) {
-    if (!text || text.length > 60) continue;
-    if (/\d/.test(text)) continue;
-    if (text.includes("@")) continue;
-    const words = text.split(/\s+/);
-    // A two-word minimum is a precision guard — a lone top line is usually
-    // `Profile` / `Resume` / a brand or section header, not a mononym. A
-    // single-word candidate is admitted ONLY through the guarded
-    // `looksLikeMononymName` path AND only as the first eligible line (#107):
-    // a one-word line that is not first-eligible is still rejected, so a
-    // two-word name on the same résumé always wins the lead slot first.
-    const isMononym = words.length === 1;
-    if (isMononym) {
-      if (firstEligibleIdx !== null) continue;
-      if (!looksLikeMononymName(text, line, maxFontSize)) continue;
-    } else if (words.length > 5) {
-      continue;
-    }
-    const letterRatio =
-      text.replace(/[^A-Za-z]/g, "").length / Math.max(text.length, 1);
-    if (letterRatio < 0.7) continue;
-    if (looksLikeDocTitleBoilerplate(words)) continue;
+    const words = nameCandidateWords(
+      text,
+      line,
+      firstEligibleIdx !== null,
+      maxFontSize,
+    );
+    if (!words) continue;
 
     if (firstEligibleIdx === null) firstEligibleIdx = idx;
 
@@ -283,7 +303,7 @@ export function extractName(
       words,
       idx,
       firstEligibleIdx,
-      isMononym,
+      isMononym: words.length === 1,
       maxFontSize,
       averageFontSize,
       contactY,
