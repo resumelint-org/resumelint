@@ -57,11 +57,15 @@ export const WEIGHTS = {
  *   section), so the retired "pool everything, subtract skills" side-channel is
  *   gone. The experience-completeness check now asks "is there a non-empty
  *   experience section?" rather than "did we see any bullet anywhere?".
+ * - 1.4 (2026-06-23): validity-aware phone completeness credit (#70) — a
+ *   parsed-but-invalid phone (libphonenumber isValid===false) earns half
+ *   completeness credit instead of full; valid phones unchanged, absent
+ *   unchanged.
  */
 // Internal-only: surfaced to the UI via the `algoVersion` score field, not
 // imported by name anywhere — so it stays unexported to satisfy the dead-code
 // gate (fallow flags exported symbols with no external consumer).
-const ATS_SCORE_ALGO_VERSION = "1.3";
+const ATS_SCORE_ALGO_VERSION = "1.4";
 
 // ── Shared scoring rules ────────────────────────────────────────────────────
 //
@@ -523,6 +527,10 @@ export interface AnonymousAtsScoreInput {
     full_name?: string;
     email?: string;
     phone?: string;
+    /** libphonenumber isValid() result plumbed from extraction (#70). When
+     *  present and false, the phone earns half completeness credit. When absent
+     *  or undefined with a present phone, backward-compatible full credit. */
+    phoneIsValid?: boolean;
     location?: string;
     linkedin_url?: string;
     summary?: string;
@@ -533,6 +541,9 @@ export interface AnonymousAtsScoreInput {
       start_date?: string;
       end_date?: string;
       is_current?: boolean;
+      /** Role body. Used as a fallback bullet source for glyph-less prose
+       *  templates whose accomplishment sections yield no marker bullets. */
+      description?: string;
     }[];
     education?: { degree?: string; institution?: string }[];
   };
@@ -565,6 +576,8 @@ export interface AnonymousAtsScoreInput {
 }
 
 const ANON_CONTACT_CONFIDENCE_FLOOR = 0.5;
+/** Completeness credit for a phone that parsed but failed libphonenumber isValid(). */
+const PHONE_INVALID_CREDIT = 0.5;
 const ANON_MIN_BULLETS_TO_GRADE = 3;
 /** Word-count floor for section bullet extraction. Set to 1 so the displayed
  *  bullet count matches what the user can see in the PDF — every line that
@@ -662,13 +675,45 @@ function extractBulletsFromSections(sections: SectionedResume): string[] {
   return out;
 }
 
+/**
+ * Fallback bullet pool for marker-less prose templates: each parsed role's
+ * `description` (one paragraph per line, the shape the entry-block parser folds
+ * wrapped prose into) becomes one or more bullets via `splitBullets`. Only used
+ * when the section pool is empty, so glyph resumes never double-count.
+ *
+ * Scope note: pools experience descriptions only — not project (#95) or
+ * achievement (#96) descriptions, which the authed scorer also pools. A
+ * glyph-less template whose prose lives solely in a projects/achievements
+ * section (with an empty accomplishment-section pool) still grades 0; broaden
+ * the fallback source if such a fixture surfaces.
+ */
+function poolExperienceDescriptions(
+  experience: { description?: string }[] | undefined,
+): string[] {
+  const out: string[] = [];
+  for (const e of experience ?? []) {
+    if (e.description) out.push(...splitBullets(e.description));
+  }
+  return out;
+}
+
 export function computeAnonymousAtsScore(
   input: AnonymousAtsScoreInput,
 ): AnonymousAtsScore {
   // ── Bullet-level dimensions (Specificity 40, Structure 30) ─────────────
   // Same scoreBulletPool the authed scorer uses — guarantees the two
   // surfaces apply identical per-bullet rules.
-  const bullets = extractBulletsFromSections(input.sections);
+  // Primary bullet source: marker-bearing lines pooled from the accomplishment
+  // sections. Fallback: glyph-less prose templates (Word / Office) write each
+  // role's description as a marker-less paragraph, so the section pool comes back
+  // empty — pool the parsed per-role descriptions instead (mirrors the authed
+  // scorer's per-role `splitBullets`). The description lines split exactly as
+  // `groupBulletsByExperience` keys on them, so the UI attributes each pooled
+  // bullet to its role.
+  let bullets = extractBulletsFromSections(input.sections);
+  if (bullets.length === 0) {
+    bullets = poolExperienceDescriptions(input.parsed.experience);
+  }
   const pool = scoreBulletPool(bullets);
   const observations = analyzeBullets(bullets);
   const gradable = pool.total >= ANON_MIN_BULLETS_TO_GRADE;
@@ -691,11 +736,26 @@ export function computeAnonymousAtsScore(
   for (const f of ANON_CONTACT_FIELDS) {
     const value = input.parsed[f.key];
     const conf = input.fieldConfidence[f.key] ?? 0;
-    completenessChecks.push({
-      key: `contact.${f.key}`,
-      passed: Boolean(value) && conf >= ANON_CONTACT_CONFIDENCE_FLOOR,
-      label: f.label,
-    });
+    const present = Boolean(value) && conf >= ANON_CONTACT_CONFIDENCE_FLOOR;
+    if (f.key === "phone") {
+      // Validity-aware phone credit (#70):
+      //   present + valid (or validity unknown) → full credit (passed: true)
+      //   present + explicitly invalid           → half credit (passed: false, credit: 0.5)
+      //   absent or below conf floor             → zero credit (passed: false)
+      const phoneInvalid = present && input.parsed.phoneIsValid === false;
+      completenessChecks.push({
+        key: `contact.${f.key}`,
+        passed: present && !phoneInvalid,
+        label: f.label,
+        ...(phoneInvalid ? { credit: PHONE_INVALID_CREDIT } : {}),
+      });
+    } else {
+      completenessChecks.push({
+        key: `contact.${f.key}`,
+        passed: present,
+        label: f.label,
+      });
+    }
   }
   const expEntries = input.parsed.experience ?? [];
   const eduEntries = input.parsed.education ?? [];
