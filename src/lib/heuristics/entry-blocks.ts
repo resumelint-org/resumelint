@@ -254,61 +254,86 @@ function isDateColumnFragment(line: PdfLine, markerX: number): boolean {
  * the date region — keyed off `dateRegionStart` so "June" and "2024" reassemble
  * adjacently rather than "June Museum 2024".
  */
-export function mergeWrappedHeaderRows(lines: PdfLine[]): PdfLine[] {
+function mergeWrappedHeaderRows(lines: PdfLine[]): PdfLine[] {
   if (lines.length === 0) return lines;
   const markerX = bulletMarkerX(lines);
   const out: PdfLine[] = [];
   let i = 0;
   while (i < lines.length) {
-    const line = lines[i];
-    const dateIdx = dateRegionStart(line.text);
-    if (
-      !isBulletLine(line) &&
-      !hasCompleteDateRange(line.text) &&
-      dateIdx >= 0
-    ) {
-      // Gather continuation rows directly below: non-bullet, non-anchor lines
-      // before the first bullet / next complete-date anchor.
-      const conts: PdfLine[] = [];
-      let j = i + 1;
-      while (
-        j < lines.length &&
-        !isBulletLine(lines[j]) &&
-        !hasCompleteDateRange(lines[j].text)
-      ) {
-        conts.push(lines[j]);
-        j++;
-      }
-      if (conts.length > 0) {
-        const textPart = line.text.slice(0, dateIdx).trim();
-        const datePart = line.text.slice(dateIdx).trim();
-        const leftFrags: string[] = [];
-        const rightFrags: string[] = [];
-        for (const c of conts) {
-          (isDateColumnFragment(c, markerX) ? rightFrags : leftFrags).push(
-            c.text.trim(),
-          );
-        }
-        const folded = [textPart, ...leftFrags, datePart, ...rightFrags]
-          .filter(Boolean)
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim();
-        if (hasCompleteDateRange(folded)) {
-          out.push({
-            ...line,
-            text: folded,
-            items: [...line.items, ...conts.flatMap((c) => c.items)],
-          });
-          i = j;
-          continue;
-        }
-      }
+    const folded = tryFoldHeaderAt(lines, i, markerX);
+    if (folded) {
+      out.push(folded.line);
+      i = folded.next;
+    } else {
+      out.push(lines[i]);
+      i++;
     }
-    out.push(line);
-    i++;
   }
   return out;
+}
+
+/**
+ * Attempt to fold the wrapped header that starts at `lines[i]`. Returns the
+ * folded header line plus the index just past the continuation rows it consumed,
+ * or null when `lines[i]` is not a foldable dangling-date header. Extracted from
+ * {@link mergeWrappedHeaderRows} to keep each function below the
+ * cognitive-complexity threshold.
+ */
+function tryFoldHeaderAt(
+  lines: PdfLine[],
+  i: number,
+  markerX: number,
+): { line: PdfLine; next: number } | null {
+  const line = lines[i];
+  const dateIdx = dateRegionStart(line.text);
+  if (isBulletLine(line) || hasCompleteDateRange(line.text) || dateIdx < 0) {
+    return null;
+  }
+  // Continuation rows directly below: non-bullet, non-anchor lines before the
+  // first bullet / next complete-date anchor.
+  const conts: PdfLine[] = [];
+  let j = i + 1;
+  while (
+    j < lines.length &&
+    !isBulletLine(lines[j]) &&
+    !hasCompleteDateRange(lines[j].text)
+  ) {
+    conts.push(lines[j]);
+    j++;
+  }
+  if (conts.length === 0) return null;
+
+  const folded = foldHeaderText(line.text, dateIdx, conts, markerX);
+  // Match gate: only commit the fold when it produced a complete range.
+  if (!hasCompleteDateRange(folded)) return null;
+  return {
+    line: { ...line, text: folded, items: [...line.items, ...conts.flatMap((c) => c.items)] },
+    next: j,
+  };
+}
+
+/** Reassemble a dangling-date header at split point `dateIdx`: left-column
+ *  continuations (org tail) append to the text before the date, right-column
+ *  continuations (the wrapped year) append to the date region — so "June" and
+ *  "2024" land adjacently rather than "June Museum 2024". */
+function foldHeaderText(
+  text: string,
+  dateIdx: number,
+  conts: PdfLine[],
+  markerX: number,
+): string {
+  const textPart = text.slice(0, dateIdx).trim();
+  const datePart = text.slice(dateIdx).trim();
+  const leftFrags: string[] = [];
+  const rightFrags: string[] = [];
+  for (const c of conts) {
+    (isDateColumnFragment(c, markerX) ? rightFrags : leftFrags).push(c.text.trim());
+  }
+  return [textPart, ...leftFrags, datePart, ...rightFrags]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
