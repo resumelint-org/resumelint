@@ -32,6 +32,7 @@ export function FeedbackPanel() {
   const [rating, setRating] = useState(0);
   const [category, setCategory] = useState<Category | "">("");
   const [feedbackText, setFeedbackText] = useState("");
+  const [wantsContact, setWantsContact] = useState(false);
   const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -40,8 +41,13 @@ export function FeedbackPanel() {
   const errorId = useId();
   const textId = useId();
   const emailId = useId();
+  const contactId = useId();
   const headingId = useId();
   const thanksRef = useRef<HTMLDivElement>(null);
+
+  // Progressive disclosure: the panel opens as a single line (heading + stars);
+  // the rest of the form only unfolds once the user commits to a rating.
+  const expanded = rating > 0;
 
   // Move focus to the thank-you region after a successful submission so
   // screen-reader users hear the confirmation.
@@ -80,7 +86,9 @@ export function FeedbackPanel() {
         rating,
         category: category || undefined,
         feedbackText,
-        email,
+        wantsContact,
+        // Email is PII — only forward it when the user opted into follow-up.
+        email: wantsContact ? email : undefined,
       });
     } catch {
       // Best-effort: capture() is fire-and-forget; swallow and still thank.
@@ -91,30 +99,26 @@ export function FeedbackPanel() {
   return (
     <Card className="flex flex-col gap-4">
       <form className="flex flex-col gap-4" onSubmit={handleSubmit} noValidate>
-        <div className="flex flex-col gap-0.5">
-          <h2
-            id={headingId}
-            className="text-sm font-semibold text-content-primary"
-          >
-            How's ResumeLint working for you?
-          </h2>
-        </div>
-
-        {/* Rating (required) */}
+        {/* Collapsed line: heading + inline rating on one row. */}
         <div className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-content-secondary">
-            Your rating
-          </span>
-          <StarRating
-            value={rating}
-            onChange={(v) => {
-              setRating(v);
-              setRatingError(false);
-            }}
-            disabled={submitting}
-            ariaLabel="Rate ResumeLint from 1 to 5 stars"
-            ariaDescribedBy={ratingError ? errorId : undefined}
-          />
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+            <h2
+              id={headingId}
+              className="text-sm font-semibold text-content-primary"
+            >
+              How's ResumeLint working for you?
+            </h2>
+            <StarRating
+              value={rating}
+              onChange={(v) => {
+                setRating(v);
+                setRatingError(false);
+              }}
+              disabled={submitting}
+              ariaLabel="Rate ResumeLint from 1 to 5 stars"
+              ariaDescribedBy={ratingError ? errorId : undefined}
+            />
+          </div>
           {ratingError && (
             <p
               id={errorId}
@@ -126,82 +130,103 @@ export function FeedbackPanel() {
           )}
         </div>
 
-        {/* Category (optional) */}
-        <div className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-content-secondary">
-            What area? (optional)
-          </span>
-          <div className="flex flex-wrap gap-2">
-            {CATEGORIES.map((c) => {
-              const selected = category === c;
-              return (
-                <Button
-                  key={c}
-                  type="button"
-                  variant={selected ? "primary" : "ghost"}
-                  aria-pressed={selected}
+        {/* Rest of the form unfolds once a rating is picked. */}
+        {expanded && (
+          <div className="flex flex-col gap-4">
+            {/* Category (optional) */}
+            <div className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-content-secondary">
+                What area needs improvement? (optional)
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {CATEGORIES.map((c) => {
+                  const selected = category === c;
+                  return (
+                    <Button
+                      key={c}
+                      type="button"
+                      variant={selected ? "primary" : "ghost"}
+                      aria-pressed={selected}
+                      disabled={submitting}
+                      onClick={() => setCategory(selected ? "" : c)}
+                      className="rounded-full border border-border-light px-3 py-1"
+                    >
+                      {c}
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Free text (optional) */}
+            <div className="flex flex-col gap-1">
+              <label
+                htmlFor={textId}
+                className="text-xs font-medium text-content-secondary"
+              >
+                Any other thoughts? (optional)
+              </label>
+              <textarea
+                id={textId}
+                value={feedbackText}
+                onChange={(e) => setFeedbackText(e.target.value)}
+                disabled={submitting}
+                rows={3}
+                placeholder="Tell us what worked, what didn't, or what you'd change…"
+                className="w-full resize-y rounded border border-border-light bg-surface-card px-2 py-1.5 text-sm text-content-primary placeholder:text-content-muted focus:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-amber"
+              />
+            </div>
+
+            {/* Contact opt-in: email field is gated behind this checkbox. */}
+            <div className="flex flex-col gap-2">
+              <label
+                htmlFor={contactId}
+                className="flex min-h-11 cursor-pointer items-center gap-2 text-xs font-medium text-content-secondary"
+              >
+                <input
+                  id={contactId}
+                  type="checkbox"
+                  checked={wantsContact}
                   disabled={submitting}
-                  onClick={() => setCategory(selected ? "" : c)}
-                  className="rounded-full border border-border-light px-3 py-1"
-                >
-                  {c}
-                </Button>
-              );
-            })}
+                  onChange={(e) => setWantsContact(e.target.checked)}
+                  className="h-4 w-4 accent-brand-amber"
+                />
+                I'd like the team to follow up with me
+              </label>
+              {wantsContact && (
+                <div className="flex flex-col gap-1">
+                  <label
+                    htmlFor={emailId}
+                    className="text-xs font-medium text-content-secondary"
+                  >
+                    Your email
+                  </label>
+                  <input
+                    id={emailId}
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    disabled={submitting}
+                    placeholder="you@example.com"
+                    className="w-full rounded border border-border-light bg-surface-card px-2 py-1.5 text-sm text-content-primary placeholder:text-content-muted focus:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-amber"
+                  />
+                </div>
+              )}
+            </div>
+
+            <div>
+              <Button
+                type="submit"
+                variant="primary"
+                size="md"
+                disabled={rating === 0 || submitting}
+              >
+                {submitting ? "Submitting…" : "Submit feedback"}
+              </Button>
+            </div>
           </div>
-        </div>
-
-        {/* Free text (optional) */}
-        <div className="flex flex-col gap-1">
-          <label
-            htmlFor={textId}
-            className="text-xs font-medium text-content-secondary"
-          >
-            Any other thoughts? (optional)
-          </label>
-          <textarea
-            id={textId}
-            value={feedbackText}
-            onChange={(e) => setFeedbackText(e.target.value)}
-            disabled={submitting}
-            rows={3}
-            placeholder="Tell us what worked, what didn't, or what you'd change…"
-            className="w-full resize-y rounded border border-border-light bg-surface-card px-2 py-1.5 text-sm text-content-primary placeholder:text-content-muted focus:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-amber"
-          />
-        </div>
-
-        {/* Email (optional, opt-in) */}
-        <div className="flex flex-col gap-1">
-          <label
-            htmlFor={emailId}
-            className="text-xs font-medium text-content-secondary"
-          >
-            Your email (optional)
-          </label>
-          <input
-            id={emailId}
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            disabled={submitting}
-            placeholder="you@example.com"
-            className="w-full rounded border border-border-light bg-surface-card px-2 py-1.5 text-sm text-content-primary placeholder:text-content-muted focus:outline-hidden focus-visible:ring-2 focus-visible:ring-brand-amber"
-          />
-          <span className="text-xs text-content-muted">
-            Optional — only if you'd like a reply.
-          </span>
-        </div>
-
-        <div>
-          <Button
-            type="submit"
-            variant="primary"
-            size="md"
-            disabled={rating === 0 || submitting}
-          >
-            {submitting ? "Submitting…" : "Submit feedback"}
-          </Button>
-        </div>
+        )}
       </form>
     </Card>
   );

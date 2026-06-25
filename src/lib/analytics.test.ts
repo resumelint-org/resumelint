@@ -49,4 +49,14 @@ describe("buildFeedbackProps — feedback_submitted payload shaping (#51)", () =
     });
     expect(props).toEqual({ rating: 1 });
   });
+
+  it("flags wants_contact only when the user opted in", () => {
+    expect("wants_contact" in buildFeedbackProps({ rating: 4 })).toBe(false);
+    expect(
+      "wants_contact" in buildFeedbackProps({ rating: 4, wantsContact: false }),
+    ).toBe(false);
+    expect(
+      buildFeedbackProps({ rating: 4, wantsContact: true }).wants_contact,
+    ).toBe(true);
+  });
 });

@@ -69,15 +69,39 @@ describe("FeedbackPanel", () => {
     expect(el.textContent).toBe("");
   });
 
-  it("renders the form with Submit disabled until a rating is chosen", async () => {
+  it("starts collapsed: rating stars only, the rest of the form hidden until a rating is chosen", async () => {
     const el = await mountPanel({ enabled: true });
     expect(el.querySelector("form")).not.toBeNull();
+    // Five star radios in the rating group are the only control on the line.
+    expect(el.querySelectorAll('input[type="radio"]').length).toBe(5);
+    // Progressive disclosure: Submit and the category pills are not rendered yet.
+    expect(el.querySelector('button[type="submit"]')).toBeNull();
+    expect(
+      Array.from(el.querySelectorAll("button")).some(
+        (b) => b.textContent === "Parsing",
+      ),
+    ).toBe(false);
+  });
+
+  it("unfolds the rest of the form once a rating is selected", async () => {
+    const el = await mountPanel({ enabled: true });
+    const third = el.querySelector(
+      'input[type="radio"][value="3"]',
+    ) as HTMLInputElement;
+    await act(async () => third.click());
+
     const submit = el.querySelector(
       'button[type="submit"]',
     ) as HTMLButtonElement;
-    expect(submit.disabled).toBe(true);
-    // Five star radios in the rating group.
-    expect(el.querySelectorAll('input[type="radio"]').length).toBe(5);
+    expect(submit).not.toBeNull();
+    expect(submit.disabled).toBe(false);
+    // Email field stays gated behind the contact opt-in checkbox.
+    expect(el.querySelector('input[type="email"]')).toBeNull();
+    const contact = el.querySelector(
+      'input[type="checkbox"]',
+    ) as HTMLInputElement;
+    await act(async () => contact.click());
+    expect(el.querySelector('input[type="email"]')).not.toBeNull();
   });
 
   it("enables Submit after a rating, fires trackFeedback, and shows the thank-you", async () => {
@@ -130,6 +154,11 @@ describe("FeedbackPanel", () => {
 
   it("toggles a category pill on and off", async () => {
     const el = await mountPanel({ enabled: true });
+    // Pills live in the disclosed section — pick a rating to reveal them.
+    const star = el.querySelector(
+      'input[type="radio"][value="5"]',
+    ) as HTMLInputElement;
+    await act(async () => star.click());
     const pill = Array.from(el.querySelectorAll("button")).find(
       (b) => b.textContent === "Parsing",
     ) as HTMLButtonElement;
