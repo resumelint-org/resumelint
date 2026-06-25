@@ -92,6 +92,11 @@ export interface FeedbackArgs {
   feedbackText?: string;
   /** Optional contact email — PII. Only attached when the user typed one. */
   email?: string;
+  /**
+   * Explicit opt-in: the user ticked "follow up with me". Recorded so marketing
+   * can segment consenting respondents even when no email channel was supplied.
+   */
+  wantsContact?: boolean;
 }
 
 /**
@@ -106,6 +111,7 @@ export function buildFeedbackProps(args: FeedbackArgs): Record<string, unknown> 
   const props: Record<string, unknown> = { rating: args.rating };
   if (args.category) props.category = args.category;
   if (args.feedbackText?.trim()) props.feedback_text = args.feedbackText.trim();
+  if (args.wantsContact) props.wants_contact = true;
   if (args.email?.trim()) props.email = args.email.trim();
   return props;
 }
