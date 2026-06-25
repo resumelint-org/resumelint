@@ -83,14 +83,41 @@ export function trackParseCompleted(args: {
   });
 }
 
-export function trackFeedback(args: {
-  verdictBand: string;
-  thumb: "up" | "down";
-}): void {
-  track("feedback_submitted", {
-    verdict_band: args.verdictBand,
-    thumb: args.thumb,
-  });
+export interface FeedbackArgs {
+  /** 1–5 star rating. Always present (submission is gated on it). */
+  rating: number;
+  /** Optional area pill: Parsing · Scoring · UI · Other. */
+  category?: string;
+  /** Optional free-text feedback. */
+  feedbackText?: string;
+  /** Optional contact email — PII. Only attached when the user typed one. */
+  email?: string;
+  /**
+   * Explicit opt-in: the user ticked "follow up with me". Recorded so marketing
+   * can segment consenting respondents even when no email channel was supplied.
+   */
+  wantsContact?: boolean;
+}
+
+/**
+ * Shape the `feedback_submitted` event properties from raw form state.
+ *
+ * Pure and exported so the PII-load-bearing rule is unit-tested without a
+ * PostHog stub: `email` (and the other optionals) are attached ONLY when the
+ * user actually provided a non-empty value — never as an empty string. See the
+ * README Telemetry section for the privacy contract this upholds.
+ */
+export function buildFeedbackProps(args: FeedbackArgs): Record<string, unknown> {
+  const props: Record<string, unknown> = { rating: args.rating };
+  if (args.category) props.category = args.category;
+  if (args.feedbackText?.trim()) props.feedback_text = args.feedbackText.trim();
+  if (args.wantsContact) props.wants_contact = true;
+  if (args.email?.trim()) props.email = args.email.trim();
+  return props;
+}
+
+export function trackFeedback(args: FeedbackArgs): void {
+  track("feedback_submitted", buildFeedbackProps(args));
 }
 
 export function trackParseFailed(args: {
@@ -158,8 +185,8 @@ export function trackRenderError(args: { errorName: string }): void {
   });
 }
 
-// WebLLM funnel. The call-sites (capability.ts, web-llm.ts, rewrite-bullet.ts,
-// rewrite-section.ts) gate the one-shot events so each fires at most once per
+// WebLLM funnel. The call-sites (capability.ts, web-llm.ts, rewrite-section.ts,
+// rewrite-resume.ts) gate the one-shot events so each fires at most once per
 // (model id, page). Same env-gating semantics as the existing trackers: when
 // VITE_POSTHOG_KEY is unset, `track()` is a no-op and these compile away.
 //
@@ -182,14 +209,8 @@ export function trackWebllmLoaded(args: { model: string }): void {
   track("webllm_loaded", { model: args.model });
 }
 
-export function trackWebllmFirstRewrite(args: { model: string }): void {
-  track("webllm_first_rewrite", { model: args.model });
-}
-
-// Section-rewrite funnel (issue #63). Kept distinct from the per-bullet
-// keys above so each path's first-rewrite conversion stays measurable.
-// `webllm_first_section_rewrite` mirrors `webllm_first_rewrite` for the
-// section path; the original per-bullet key is preserved unchanged.
+// Section-rewrite funnel (issue #63). Kept distinct from resume-rewrite
+// so each path's first-rewrite conversion stays independently measurable.
 
 export function trackWebllmSectionRewriteStarted(args: {
   model: string;
