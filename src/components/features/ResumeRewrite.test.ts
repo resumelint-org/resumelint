@@ -15,8 +15,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ResumeRewritePanel, StepIndicator } from "./ResumeRewrite.tsx";
 import { aggregateDrift } from "./ResumeRewriteProposed.tsx";
-import { labelForResumeRewrite, type ResumeRewriteStatus } from "../../hooks/useResumeRewrite.ts";
-import type { ResumeRewriteResult } from "../../lib/webllm/rewrite-resume.ts";
+import { labelForResumeRewrite, sectionsEqual, type ResumeRewriteStatus } from "../../hooks/useResumeRewrite.ts";
+import type { ResumeRewriteResult, SectionInput } from "../../lib/webllm/rewrite-resume.ts";
 
 const idle: ResumeRewriteStatus = { kind: "idle" };
 const loading: ResumeRewriteStatus = {
@@ -119,6 +119,46 @@ describe("labelForResumeRewrite", () => {
       },
     };
     expect(labelForResumeRewrite(done, false)).toBe("Rewriting 3 of 3…");
+  });
+});
+
+describe("sectionsEqual", () => {
+  const summary: SectionInput = {
+    kind: "summary",
+    id: "summary",
+    label: "Summary",
+    text: "Engineer.",
+  };
+  const role: SectionInput = {
+    kind: "experience",
+    id: "experience:0",
+    label: "Engineer",
+    bullets: ["a", "b"],
+  };
+
+  it("is true for the same list and for an identical-content copy", () => {
+    expect(sectionsEqual([summary, role], [summary, role])).toBe(true);
+    expect(sectionsEqual([summary, role], [{ ...summary }, { ...role, bullets: ["a", "b"] }])).toBe(true);
+  });
+
+  it("is false when the lengths differ", () => {
+    expect(sectionsEqual([summary], [summary, role])).toBe(false);
+  });
+
+  it("is false when a section's kind or id changes", () => {
+    expect(sectionsEqual([role], [{ ...role, id: "experience:1" }])).toBe(false);
+    expect(
+      sectionsEqual([summary], [{ ...role, id: "summary" } as SectionInput]),
+    ).toBe(false);
+  });
+
+  it("is false when summary text changes", () => {
+    expect(sectionsEqual([summary], [{ ...summary, text: "Edited." }])).toBe(false);
+  });
+
+  it("is false when an experience bullet's text or count changes", () => {
+    expect(sectionsEqual([role], [{ ...role, bullets: ["a", "c"] }])).toBe(false);
+    expect(sectionsEqual([role], [{ ...role, bullets: ["a"] }])).toBe(false);
   });
 });
 

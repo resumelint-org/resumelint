@@ -588,7 +588,7 @@ function AchievementsSection({
  * stale-source guard (which compares ids) can tell "the section list
  * changed" from "react re-rendered with the same data."
  */
-function buildResumeSections(
+export function buildResumeSections(
   summary: string | undefined,
   experienceGroups: readonly BulletGroup[],
   bulletOverrides: BulletOverrides,
@@ -621,7 +621,7 @@ function buildResumeSections(
   return out;
 }
 
-function roleLabel(exp: BulletGroup["experience"]): string {
+export function roleLabel(exp: BulletGroup["experience"]): string {
   if (exp === null) return "Other bullets";
   const { title, company } = exp;
   if (title && company) return `${title} — ${company}`;

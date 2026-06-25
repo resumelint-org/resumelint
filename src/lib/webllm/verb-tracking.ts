@@ -8,7 +8,9 @@
  * rewritten bullet (and the first word of the rewritten summary), then folds
  * the accumulated set into a soft-constraint sentence ("Verbs already used in
  * prior bullets: built, led, shipped. Choose different verbs where you can.")
- * that is prepended to the user prompt of the next section.
+ * that the orchestrator folds into the next section's SYSTEM prompt (a
+ * reference-only block — not the user message — so small instruct models
+ * don't echo it as content; see rewrite-resume.ts).
  *
  * Strictly lexical — we do NOT consult the eval rubric's action-verb list
  * (`eval/verbs.ts`) here. The constraint is "don't repeat the verb you
@@ -55,7 +57,7 @@ const VERB_BRIEF_CAP = 12;
 
 /**
  * Format the accumulated verb set as a single-sentence soft constraint for
- * the next call's user prompt. Returns `null` when there's nothing to say
+ * the next call's system prompt. Returns `null` when there's nothing to say
  * yet (first section in the chain).
  *
  * The instruction is phrased as a preference ("Choose different verbs where
