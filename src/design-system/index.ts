@@ -27,3 +27,4 @@ export * from "./shared/Tabs.tsx";
 export * from "./shared/ErrorState.tsx";
 export * from "./shared/ErrorBoundary.tsx";
 export * from "./shared/UpdateBanner.tsx";
+export * from "./shared/GitHubStarCta.tsx";

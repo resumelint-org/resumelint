@@ -2,7 +2,8 @@
 // Copyright 2026 The resumelint Authors
 
 import { useEffect, useMemo, useState } from "react";
-import { Chip, ErrorState, ErrorBoundary, UpdateBanner } from "@design-system";
+import { Chip, ErrorState, ErrorBoundary, UpdateBanner, GitHubStarCta } from "@design-system";
+import { useGitHubStars } from "./hooks/useGitHubStars.ts";
 import { DropZone } from "./components/DropZone";
 import { Result } from "./components/Result";
 import { JdMatch } from "./components/features/JdMatch.tsx";
@@ -16,6 +17,7 @@ import { extractJdTerms, computeCoverage } from "./lib/jd-match";
 
 export default function App() {
   const { state, handleFile, reset, formatBytes } = useResumeAnalysis();
+  const { count: starCount } = useGitHubStars();
   const [jdText, setJdText] = useState("");
 
   // Proactive stale-deploy notice (see useUpdateChecker). Dismissable so a user
@@ -107,9 +109,12 @@ export default function App() {
               alpha
             </span>
           </div>
-          <p className="hidden text-xs text-content-muted sm:block">
-            PDF parser stress test for resumes
-          </p>
+          <div className="flex items-center gap-4">
+            <p className="hidden text-xs text-content-muted sm:block">
+              PDF parser stress test for resumes
+            </p>
+            <GitHubStarCta variant="inline" count={starCount} />
+          </div>
         </div>
         <div className="flex flex-wrap gap-2">
           <Chip icon="⚡">A few seconds</Chip>
@@ -179,14 +184,6 @@ export default function App() {
       <footer className="mt-auto flex flex-col gap-2 border-t border-border-light pt-6 text-xs text-content-tertiary">
         <p>Your PDF stays in this browser tab.</p>
         <div className="flex flex-wrap gap-x-4 gap-y-1">
-          <a
-            href="https://github.com/resumelint-org/resumelint"
-            target="_blank"
-            rel="noreferrer noopener"
-            className="hover:underline"
-          >
-            GitHub
-          </a>
           <a
             href="https://github.com/resumelint-org/resumelint/blob/main/LICENSE"
             target="_blank"
