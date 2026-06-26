@@ -78,12 +78,16 @@ export function BulletReviewRow({
             {accepted ? "Accepted" : "Accept"}
           </Button>
           <Button
-            variant={rejected ? "primary" : "ghost"}
+            variant="ghost"
             size="sm"
             onClick={() => review.reject(pair.id)}
             aria-pressed={rejected}
             aria-label={`Reject this ${kindLabel.toLowerCase()}`}
-            className="rounded-md px-2 py-0.5 text-[11px] text-content-tertiary"
+            className={`rounded-md px-2 py-0.5 text-[11px] ${
+              rejected
+                ? "border border-border bg-surface-hover text-content-secondary"
+                : "text-content-tertiary"
+            }`}
           >
             {rejected ? "Rejected" : "Reject"}
           </Button>

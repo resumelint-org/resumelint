@@ -138,7 +138,6 @@ function RewriteLauncher({
                 void controller.start();
                 setOpen(false);
               }}
-              aria-label="Run the full-résumé rewrite"
             >
               Run rewrite
             </Button>
@@ -181,8 +180,13 @@ function RewriteSteeringBox({
       return;
     }
     setPageTarget(preset.target);
-    // Prefill only when the box is empty — don't overwrite custom text.
-    if (userInstructions.trim().length === 0) setUserInstructions(preset.hint);
+    // Prefill when the box is empty OR still holds another preset's hint — so
+    // switching 1→2 pages refreshes the visible copy instead of leaving a stale
+    // "single page" line. Never clobber text we don't recognize as a preset hint.
+    const current = userInstructions.trim();
+    if (current.length === 0 || PRESET_HINTS.has(current)) {
+      setUserInstructions(preset.hint);
+    }
   };
 
   return (

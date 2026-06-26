@@ -22,7 +22,7 @@
  * cross-section aggregation contract without re-rendering the whole panel.
  */
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { Button, InlineResult, InlineDiff } from "@design-system";
 import { computeTextDiff } from "../../lib/diff/text-diff.ts";
 import type {
@@ -101,7 +101,7 @@ export function ProposedPanel({
     [reviewSections],
   );
 
-  const onApply = () => {
+  const onApply = useCallback(() => {
     for (const sec of reviewSections) {
       const writes = resolveSectionWrites(
         sec.pairs,
@@ -116,7 +116,7 @@ export function ProposedPanel({
       }
     }
     onDismiss();
-  };
+  }, [reviewSections, review.decisions, review.edits, onDismiss]);
 
   const accepted = review.acceptedCount;
 
