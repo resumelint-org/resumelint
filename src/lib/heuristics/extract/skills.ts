@@ -75,7 +75,7 @@ function splitRespectingParens(text: string): string[] {
  *
  * Defends against bleed-in from neighboring sections when the section-boundary
  * fix did not catch a given token. Filters:
- *   - date-range runs ("1985 - 1989 Riverton", "04/2021 - Present")
+ *   - date-range runs ("2001 - 2005 Riverton", "04/2021 - Present")
  *   - tokens with more than 6 whitespace-delimited words (sentence fragments
  *     like "Over 200+ interviews for engineering" — real skills are terse, but
  *     legitimate 5–6 word skill names like "LLM Architectures & Prompt
@@ -114,7 +114,7 @@ function isSkillToken(tok: string): boolean {
   // A professional-profile link (or its bare "GitHub" / "LinkedIn" heading) is
   // contact info, not a skill — drop it wherever in the doc it surfaced.
   if (looksLikeContactLink(tok)) return false;
-  // Reject date-range runs: "1985 - 1989", "04/2021 - Present" etc.
+  // Reject date-range runs: "2001 - 2005", "04/2021 - Present" etc.
   if (/\d{4}\s*[-–]\s*(\d{4}|present)/i.test(tok)) return false;
   // Reject tokens that span more than 6 words — real skills are terse, but
   // legitimate 5–6 word names like "LLM Architectures & Prompt Engineering"
