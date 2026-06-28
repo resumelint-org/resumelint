@@ -298,6 +298,28 @@ function matchAnchorFallback(
     const first = w[0];
     if (!/[A-Z]/.test(first)) return null;
   }
+  // Guard 8: an organization / institution name, not a heading. A line that
+  // pairs an ALL-CAPS acronym token (an org initialism — "ACME", "QSU", "ZTU")
+  // with a Title-case proper-noun word BEFORE the head noun reads as an entity
+  // whose trailing category word is part of the NAME, not a section header —
+  // "ACME Professional Education", "QSU Graduate Academics" (the "Professional"
+  // / "Graduate" modifier is the tell). The acronym alone is NOT enough: a
+  // domain-qualified header pairs an acronym directly with the head noun and IS
+  // a real heading — "IT Experience", "QA Qualifications" — so reject only when
+  // a non-acronym Title-case word sits between the acronym and the trailing
+  // anchor. Wholly ALL CAPS ("PROFESSIONAL EXPERIENCE") and wholly Title-case
+  // ("Relevant Experience") headers carry no acronym and never reach this test.
+  const isAcronym = (w: string) => /^[A-Z]{2,}$/.test(w);
+  const allCaps = rawWords.every((w) => w === w.toUpperCase());
+  if (!allCaps && rawWords.some(isAcronym)) {
+    // Modifier words = everything before the trailing head noun. A Title-case
+    // non-acronym modifier ("Professional", "Graduate") marks a proper-noun
+    // entity; an acronym-only prefix ("IT", "QA") is a domain qualifier.
+    const hasProperNounModifier = rawWords
+      .slice(0, -1)
+      .some((w) => !isAcronym(w) && /^[A-Z]/.test(w));
+    if (hasProperNounModifier) return null;
+  }
   const last = tokens[tokens.length - 1];
   // Guard 3 + 6: last token must be an anchor of a fallback-enabled section.
   for (const [name, anchors] of Object.entries(SECTION_ANCHORS) as Array<
