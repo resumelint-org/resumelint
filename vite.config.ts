@@ -73,8 +73,51 @@ function emitVersionJson(version: string): Plugin {
   };
 }
 
+// Redirect the bare `/jd-fit` to the canonical `/jd-fit/` in dev and preview.
+// The page is served as a directory index (`jd-fit/index.html` at `/jd-fit/`);
+// static hosts that auto-redirect no-slash directory paths (GitHub Pages) make
+// `/jd-fit` work in production, but Vite's dev/preview servers do not — without
+// this they 404 the slash-less form. This middleware mirrors the Pages behavior
+// so local and production accept both `/jd-fit` and `/jd-fit/`. Base-aware:
+// only the canonical leaf is redirected; everything else falls through.
+function jdFitTrailingSlash(): Plugin {
+  const bare = `${BASE_PATH}jd-fit`; // BASE_PATH always ends in "/", e.g. "/jd-fit"
+  const target = `${bare}/`;
+  const redirect = (
+    req: { url?: string },
+    res: { statusCode: number; setHeader: (k: string, v: string) => void; end: () => void },
+    next: () => void,
+  ) => {
+    const [path, query] = (req.url ?? "").split("?");
+    if (path === bare) {
+      res.statusCode = 301;
+      res.setHeader("Location", query ? `${target}?${query}` : target);
+      res.end();
+      return;
+    }
+    next();
+  };
+  return {
+    name: "resumelint:jd-fit-trailing-slash",
+    configureServer(server) {
+      server.middlewares.use(redirect);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(redirect);
+    },
+  };
+}
+
 export default defineConfig({
   base: BASE_PATH,
+  // Multi-page app, not SPA. The default 'spa' appType silently falls back to
+  // serving the root index.html (the parser) for ANY unmatched path — so
+  // `/resumelint`, or `/jd-fit` without its trailing slash, would render the
+  // parser instead of 404ing. 'mpa' disables that catch-all: `/` → parser,
+  // `/jd-fit/` → JD fit, and anything else 404s honestly. The two products are
+  // real, separate HTML entries — there is no client-side router to fall back
+  // for.
+  appType: "mpa",
   server: {
     // Bind 0.0.0.0 so the dev server is reachable from other machines on the
     // LAN (e.g. http://<your-host>.local:5173/), not just loopback.
@@ -83,17 +126,27 @@ export default defineConfig({
     // ".local" matches any *.local host.
     allowedHosts: [".local"],
   },
-  plugins: [tailwindcss(), react(), emitVersionJson(APP_VERSION)],
+  plugins: [
+    tailwindcss(),
+    react(),
+    emitVersionJson(APP_VERSION),
+    jdFitTrailingSlash(),
+  ],
   build: {
-    // Two root HTML entries (#226): `/` (parser audit) and `/jd-fit` (JD match
-    // + JD-driven rewrite). Declaring `input` explicitly means the build ships
-    // exactly these two pages — the dev-only `jd-spike.html` / `eval-rewrite.html`
+    // Two HTML entries (#226): `/` (parser audit, index.html) and `/jd-fit/`
+    // (JD match + JD-driven rewrite, jd-fit/index.html). The JD-fit page uses
+    // directory-index form (`jd-fit/index.html`, served at `/jd-fit/`) rather
+    // than a flat `jd-fit.html` so the extensionless URL resolves identically
+    // on Vite dev, the GCS bucket, and GitHub Pages — a flat `jd-fit.html` only
+    // clean-URLs on Pages, 404ing the canonical `/jd-fit/` path elsewhere.
+    // Declaring `input` explicitly means the build ships exactly these two
+    // pages — the dev-only `jd-spike.html` / `eval-rewrite.html`
     // harnesses (which Vite's default auto-discovery would otherwise bundle) are
     // no longer emitted into dist/, which is the intended production surface.
     rollupOptions: {
       input: {
         main: fileURLToPath(new URL("./index.html", import.meta.url)),
-        jdFit: fileURLToPath(new URL("./jd-fit.html", import.meta.url)),
+        jdFit: fileURLToPath(new URL("./jd-fit/index.html", import.meta.url)),
       },
     },
   },

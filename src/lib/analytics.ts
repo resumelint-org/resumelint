@@ -7,6 +7,8 @@ import type { AtsPlatform } from "./jd-match/fetch-jd";
 
 type PostHog = {
   capture: (event: string, props?: Record<string, unknown>) => void;
+  isFeatureEnabled?: (key: string) => boolean | undefined;
+  onFeatureFlags?: (cb: () => void) => void;
 };
 
 const KEY = import.meta.env.VITE_POSTHOG_KEY ?? "";
@@ -52,6 +54,35 @@ export async function initAnalytics(): Promise<void> {
   ph = mod.default as unknown as PostHog;
   for (const [evt, props] of queue) ph.capture(evt, props);
   queue.length = 0;
+  // Fan PostHog's flag-refresh callback out to flag subscribers (see flags.ts).
+  // Fires once flags first resolve, and again on any later refresh, so a gated
+  // surface flips on/off without a reload. Also flush immediately in case flags
+  // were already cached before the first subscriber registered.
+  ph.onFeatureFlags?.(() => {
+    for (const cb of flagSubs) cb();
+  });
+  for (const cb of flagSubs) cb();
+}
+
+// --- Feature flags (consumed by src/lib/flags.ts) -------------------------
+// PostHog is the *rollout override* layer; the build-time env default in
+// flags.ts is the real gate. When VITE_POSTHOG_KEY is unset, `ph` stays null,
+// `getFeatureFlag` returns undefined, and the env default wins — so a keyless
+// OSS build never depends on PostHog (and the posthog-js chunk stays
+// tree-shaken).
+const flagSubs = new Set<() => void>();
+
+/** PostHog's verdict for a flag, or undefined when PostHog isn't loaded. */
+export function getFeatureFlag(key: string): boolean | undefined {
+  return ph?.isFeatureEnabled?.(key);
+}
+
+/** Subscribe to flag refreshes; returns an unsubscribe fn. */
+export function subscribeFeatureFlags(cb: () => void): () => void {
+  flagSubs.add(cb);
+  return () => {
+    flagSubs.delete(cb);
+  };
 }
 
 function track(event: string, props: Record<string, unknown>): void {

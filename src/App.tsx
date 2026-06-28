@@ -7,10 +7,15 @@ import { Result } from "./components/Result";
 import { PageShell } from "./components/features/PageShell.tsx";
 import { useAnalyzedResume } from "./hooks/useAnalyzedResume.ts";
 import { writeJdFitHandoff } from "./lib/jd-fit-handoff.ts";
+import { useFlag } from "./lib/flags.ts";
 
 export default function App() {
   const { state, edit, edited, handleFile, reset, formatBytes } =
     useAnalyzedResume();
+
+  // Cross-sell to the `/jd-fit/` surface is gated (default off) — `/jd-fit/` is
+  // alpha and not ready to promote from the parser result. See lib/flags.ts.
+  const jdFitEnabled = useFlag("jd-fit-banner");
 
   // Cross-link to /jd-fit (#226). On click we stash the edited parse in
   // sessionStorage (one-shot handoff) so JD-fit rehydrates it without
@@ -23,7 +28,7 @@ export default function App() {
         score: edited.score,
       });
     }
-    window.location.href = `${import.meta.env.BASE_URL}jd-fit`;
+    window.location.href = `${import.meta.env.BASE_URL}jd-fit/`;
   };
 
   return (
@@ -64,14 +69,6 @@ export default function App() {
       <ErrorBoundary onReset={reset}>
         {state.phase === "done" && edited && (
           <>
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border-light bg-surface-subtle px-4 py-3">
-              <p className="text-sm text-content-secondary">
-                Tailoring this resume to a specific role?
-              </p>
-              <Button variant="primary" size="sm" onClick={goToJdFit}>
-                Check fit against a job →
-              </Button>
-            </div>
             <Result
               // `parsed` carries the edited experience descriptions so
               // `groupBulletsByExperience` (in ReconstructedResume) attributes
@@ -88,6 +85,20 @@ export default function App() {
               onReset={reset}
               edit={edit}
             />
+            {jdFitEnabled && (
+              // Cross-sell sits *below* the result as a quiet follow-on, not a
+              // primary-CTA banner above the score: the page's one primary
+              // action is the user's parse/score, not navigation to another
+              // product. Demoted to a `link` so it doesn't out-shout the result.
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border-light bg-surface-subtle px-4 py-3">
+                <p className="text-sm text-content-secondary">
+                  Tailoring this resume to a specific role?
+                </p>
+                <Button variant="link" size="sm" onClick={goToJdFit}>
+                  Check fit against a job →
+                </Button>
+              </div>
+            )}
           </>
         )}
       </ErrorBoundary>

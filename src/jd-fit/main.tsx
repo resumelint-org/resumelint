@@ -18,7 +18,7 @@ setAnalyticsSurface("jd-fit");
 void initAnalytics();
 
 // Stale-deploy safety net (mirrors src/main.tsx). A tab loaded before a deploy
-// holds the old jd-fit.html, whose hashed tier chunks are gone after the site
+// holds the old jd-fit/index.html, whose hashed tier chunks are gone after the site
 // snapshot is replaced. The failing import fires `vite:preloadError`; reload
 // pulls the fresh build. The sessionStorage guard prevents a reload loop.
 window.addEventListener("vite:preloadError", () => {

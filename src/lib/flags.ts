@@ -1,0 +1,52 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 The resumelint Authors
+
+/**
+ * Feature flags — two-layer gate.
+ *
+ * 1. **Build-time env default** (this file's `FLAG_DEFAULTS`). The real
+ *    kill-switch: synchronous, works in every build (including the keyless OSS
+ *    build), no async flicker, and dead-code-eliminates a gated surface when
+ *    off. Set the env var at build time to flip the default.
+ * 2. **PostHog override** (optional rollout dial). When PostHog is loaded, its
+ *    `isFeatureEnabled` verdict — if defined — overrides the env default,
+ *    enabling % rollout / targeting without a rebuild. When PostHog is absent
+ *    (no `VITE_POSTHOG_KEY`), the env default wins and no posthog-js is pulled
+ *    in (see analytics.ts).
+ *
+ * Flags resolve to the env default first, so visible UI never pops in/out while
+ * PostHog's flags load over the network.
+ */
+
+import { useEffect, useState } from "react";
+import { getFeatureFlag, subscribeFeatureFlags } from "./analytics";
+
+const envOn = (v: unknown): boolean => v === "true" || v === "1";
+
+/**
+ * Build-time defaults, keyed by PostHog flag name (kebab-case to match the
+ * PostHog flag key). Default OFF unless its env var is explicitly set.
+ *
+ * - `jd-fit-banner` (`VITE_ENABLE_JD_FIT`) — the "Check fit against a job"
+ *   cross-sell to the `/jd-fit/` surface. Off by default: `/jd-fit/` is alpha
+ *   and not ready to promote from the parser result.
+ */
+export const FLAG_DEFAULTS = {
+  "jd-fit-banner": envOn(import.meta.env.VITE_ENABLE_JD_FIT),
+} as const;
+
+export type FlagName = keyof typeof FLAG_DEFAULTS;
+
+/**
+ * Resolve a feature flag: PostHog override if present, else the build-time env
+ * default. Re-renders when PostHog's flags refresh.
+ */
+export function useFlag(name: FlagName): boolean {
+  const [on, setOn] = useState<boolean>(FLAG_DEFAULTS[name]);
+  useEffect(() => {
+    const resolve = () => setOn(getFeatureFlag(name) ?? FLAG_DEFAULTS[name]);
+    resolve();
+    return subscribeFeatureFlags(resolve);
+  }, [name]);
+  return on;
+}
