@@ -103,6 +103,10 @@ describe("matchSectionHeader — head-noun anchor fallback (#108 / #111)", () =>
     // Genuine headers are unaffected: wholly ALL CAPS, or wholly Title-case.
     expect(matchSectionHeader("PROFESSIONAL EXPERIENCE")).toBe("experience");
     expect(matchSectionHeader("Professional Experience")).toBe("experience");
+    // A domain-qualified header pairs the acronym DIRECTLY with the head noun
+    // (no proper-noun modifier between) and is a real heading, not an org name.
+    expect(matchSectionHeader("IT Experience")).toBe("experience");
+    expect(matchSectionHeader("HR Experience")).toBe("experience");
   });
 
   it("rejects a header-shaped line ending in terminal punctuation", () => {

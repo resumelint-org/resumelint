@@ -245,12 +245,17 @@ export function EducationSection({
                 key={added ? added.id : i}
                 edu={edu}
                 overrides={added ? undefined : educationOverrides[i]}
-                onFieldChange={(field, value) =>
-                  added
-                    ? field !== "field" &&
-                      onEntryField(added.id, EDUCATION_FIELD_MAP[field], value)
-                    : onEducationFieldChange(i, field, value)
-                }
+                onFieldChange={(field, value) => {
+                  if (!added) {
+                    onEducationFieldChange(i, field, value);
+                    return;
+                  }
+                  // Added entries carry no major slot; the `field` edit can't
+                  // originate here (the major affordance is parsed-only), and
+                  // EDUCATION_FIELD_MAP has no "field" key — narrow it out.
+                  if (field !== "field")
+                    onEntryField(added.id, EDUCATION_FIELD_MAP[field], value);
+                }}
                 onRemove={added ? () => onRemoveEntry(added.id) : undefined}
                 isAdded={Boolean(added)}
               />
