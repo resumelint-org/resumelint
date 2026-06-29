@@ -21,6 +21,7 @@ import { useLlmEscapeHatch } from "../hooks/useLlmEscapeHatch.ts";
 import { useResumeCritique } from "../hooks/useResumeCritique.ts";
 import { LlmEscapeHatchBanner } from "./features/LlmEscapeHatchBanner.tsx";
 import type { LlmParsedResume } from "../lib/webllm/parse-resume.ts";
+import { mergeLlmParse } from "../lib/webllm/merge-override.ts";
 
 // LAYOUT_TRIGGER_BLURBS for fonts_unmappable is still needed by LimitedParsingCard.
 const FONTS_UNMAPPABLE_BLURB =
@@ -119,36 +120,10 @@ function ParsedCard({
   // fields stay original — the override is parse-field only. `suggestedEscalation`
   // is cleared to "none" since we've recovered. Score is re-derived from the
   // overridden parse so the readout reflects the LLM result.
-  const activeResult: CascadeResult = useMemo(() => {
-    if (llmOverride === null) return result;
-    return {
-      ...result,
-      suggestedEscalation: "none",
-      parsed: {
-        ...result.parsed,
-        full_name: llmOverride.full_name ?? result.parsed.full_name,
-        email: llmOverride.email ?? result.parsed.email,
-        phone: llmOverride.phone ?? result.parsed.phone,
-        location: llmOverride.location ?? result.parsed.location,
-        summary: llmOverride.summary ?? result.parsed.summary,
-        skills: llmOverride.skills.length > 0 ? llmOverride.skills : result.parsed.skills,
-        experience: llmOverride.experience.length > 0
-          ? llmOverride.experience.map((e) => ({
-              company: e.company,
-              title: e.title,
-              description: e.description,
-              is_current: false,
-            }))
-          : result.parsed.experience,
-        education: llmOverride.education.length > 0
-          ? llmOverride.education.map((e) => ({
-              institution: e.institution,
-              degree: e.degree,
-            }))
-          : result.parsed.education,
-      },
-    };
-  }, [result, llmOverride]);
+  const activeResult: CascadeResult = useMemo(
+    () => (llmOverride === null ? result : mergeLlmParse(result, llmOverride)),
+    [result, llmOverride],
+  );
 
   const activeScore: AnonymousAtsScore = useMemo(() => {
     if (llmOverride === null) return score;

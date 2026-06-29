@@ -149,6 +149,140 @@ function coerceMeta(raw: Record<string, unknown>): {
   return { missingSections, summaryFeedback };
 }
 
+/**
+ * Call the engine with a system+user prompt, returning the raw text content.
+ * NEVER throws — on any engine failure it logs and returns an empty string so
+ * the caller's parse step degrades to safe defaults. `label` names the pass in
+ * the warning so failures stay diagnosable.
+ */
+async function callEngine(
+  engine: WebLlmEngine,
+  systemPrompt: string,
+  userPrompt: string,
+  maxTokens: number,
+  label: string,
+): Promise<string> {
+  try {
+    const response = await engine.chat.completions.create({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      temperature: 0,
+      max_tokens: maxTokens,
+    });
+    return response.choices[0]?.message?.content ?? "";
+  } catch (err) {
+    console.warn(`[critique-resume] ${label} pass failed:`, err);
+    return "";
+  }
+}
+
+/**
+ * Parse the bullet-pass response into one finding per bullet, in order.
+ * Empty/partial output is padded with `ok` so every bullet renders without
+ * gaps.
+ */
+function parseBulletResponse(
+  bulletRaw: string,
+  bullets: string[],
+): BulletFinding[] {
+  // Engine returned nothing — treat all as ok; the meta section still renders.
+  if (!bulletRaw.trim()) {
+    return bullets.map((b) => ({ bullet: b, issue: "ok" as const }));
+  }
+  const findings: BulletFinding[] = [];
+  // Match lines to bullets. Accept as many valid JSON lines as we get —
+  // partial output is still useful.
+  let bulletIdx = 0;
+  for (const line of bulletRaw.split("\n")) {
+    if (bulletIdx >= bullets.length) break;
+    const obj = tryParseJson(line);
+    if (obj === null) continue;
+    findings.push(coerceBulletFinding(obj, bullets[bulletIdx]!));
+    bulletIdx++;
+  }
+  // If the model returned fewer findings than bullets (truncation), pad with
+  // "ok" so the UI can still show all bullets without gaps.
+  for (let i = findings.length; i < bullets.length; i++) {
+    findings.push({ bullet: bullets[i]!, issue: "ok" });
+  }
+  return findings;
+}
+
+/** Pass 1: per-bullet critique. Returns `[]` when there are no bullets. */
+async function runBulletPass(
+  bullets: string[],
+  engine: WebLlmEngine,
+): Promise<BulletFinding[]> {
+  if (bullets.length === 0) return [];
+  const userPrompt = bullets.map((b, i) => `${i + 1}. ${b}`).join("\n");
+  // Max tokens: ~60 per bullet (issue + suggestion) + headroom.
+  const maxTokens = Math.min(64 * bullets.length + 128, 1200);
+  const raw = await callEngine(
+    engine,
+    BULLET_SYSTEM_PROMPT,
+    `Bullets:\n${userPrompt}`,
+    maxTokens,
+    "bullet",
+  );
+  return parseBulletResponse(raw, bullets);
+}
+
+/** Build the compact content summary fed to the meta pass. */
+function buildMetaContent(
+  parsed: HeuristicParsedResume,
+  bulletCount: number,
+): string {
+  const hasExperience = (parsed.experience ?? []).length > 0;
+  const hasEducation = (parsed.education ?? []).length > 0;
+  const hasSkills = (parsed.skills ?? []).length > 0;
+  const hasSummary =
+    typeof parsed.summary === "string" && parsed.summary.trim().length > 0;
+  const summaryText = hasSummary ? (parsed.summary as string) : "";
+
+  return [
+    `summary: ${hasSummary ? `"${summaryText.slice(0, 300)}"` : "absent"}`,
+    `skills: ${hasSkills ? `${(parsed.skills ?? []).length} listed` : "absent"}`,
+    `experience: ${hasExperience ? `${(parsed.experience ?? []).length} role(s)` : "absent"}`,
+    `education: ${hasEducation ? `${(parsed.education ?? []).length} entry` : "absent"}`,
+    `bullet count: ${bulletCount}`,
+  ].join("\n");
+}
+
+/** Extract the first `{…}` JSON block from the meta response and coerce it. */
+function parseMetaResponse(metaRaw: string): {
+  missingSections: string[];
+  summaryFeedback?: string;
+} {
+  if (!metaRaw.trim()) return { missingSections: [] };
+  const firstBrace = metaRaw.indexOf("{");
+  const lastBrace = metaRaw.lastIndexOf("}");
+  if (firstBrace === -1 || lastBrace <= firstBrace) {
+    return { missingSections: [] };
+  }
+  const obj = tryParseJson(metaRaw.slice(firstBrace, lastBrace + 1));
+  if (obj === null) return { missingSections: [] };
+  return coerceMeta(obj);
+}
+
+/** Pass 2: meta critique (missing sections + summary feedback). */
+async function runMetaPass(
+  parsed: HeuristicParsedResume,
+  bulletCount: number,
+  engine: WebLlmEngine,
+): Promise<{ missingSections: string[]; summaryFeedback?: string }> {
+  const metaContent = buildMetaContent(parsed, bulletCount);
+  const raw = await callEngine(
+    engine,
+    META_SYSTEM_PROMPT,
+    `Resume sections:\n${metaContent}`,
+    256,
+    "meta",
+  );
+  return parseMetaResponse(raw);
+}
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /**
@@ -168,102 +302,11 @@ export async function critiqueResumeWithLlm(
   engine: WebLlmEngine,
 ): Promise<ResumeCritique> {
   const bullets = collectBullets(parsed);
-
-  // ── Pass 1: Per-bullet critique ─────────────────────────────────────────────
-  let bulletFindings: BulletFinding[] = [];
-  if (bullets.length > 0) {
-    const bulletUserPrompt = bullets
-      .map((b, i) => `${i + 1}. ${b}`)
-      .join("\n");
-    // Max tokens: ~60 per bullet (issue + suggestion) + headroom.
-    const bulletMaxTokens = Math.min(64 * bullets.length + 128, 1200);
-
-    let bulletRaw = "";
-    try {
-      const response = await engine.chat.completions.create({
-        messages: [
-          { role: "system", content: BULLET_SYSTEM_PROMPT },
-          { role: "user", content: `Bullets:\n${bulletUserPrompt}` },
-        ],
-        temperature: 0,
-        max_tokens: bulletMaxTokens,
-      });
-      bulletRaw = response.choices[0]?.message?.content ?? "";
-    } catch (err) {
-      console.warn("[critique-resume] bullet pass failed:", err);
-    }
-
-    if (bulletRaw.trim()) {
-      const lines = bulletRaw.split("\n");
-      // Try to match lines to bullets. Accept as many valid JSON lines as we
-      // get — partial output is still useful.
-      let bulletIdx = 0;
-      for (const line of lines) {
-        if (bulletIdx >= bullets.length) break;
-        const obj = tryParseJson(line);
-        if (obj === null) continue;
-        bulletFindings.push(coerceBulletFinding(obj, bullets[bulletIdx]!));
-        bulletIdx++;
-      }
-      // If the model returned fewer findings than bullets (truncation), pad
-      // with "ok" so the UI can still show all bullets without gaps.
-      for (let i = bulletFindings.length; i < bullets.length; i++) {
-        bulletFindings.push({ bullet: bullets[i]!, issue: "ok" });
-      }
-    } else {
-      // Engine returned nothing — treat all as ok, critique still renders
-      // the meta section.
-      bulletFindings = bullets.map((b) => ({ bullet: b, issue: "ok" as const }));
-    }
-  }
-
-  // ── Pass 2: Meta critique (missing sections + summary) ──────────────────────
-  let missingSections: string[] = [];
-  let summaryFeedback: string | undefined;
-
-  // Build a compact content summary for the meta pass.
-  const hasExperience = (parsed.experience ?? []).length > 0;
-  const hasEducation = (parsed.education ?? []).length > 0;
-  const hasSkills = (parsed.skills ?? []).length > 0;
-  const hasSummary = typeof parsed.summary === "string" && parsed.summary.trim().length > 0;
-  const summaryText = hasSummary ? (parsed.summary as string) : "";
-
-  const metaContent = [
-    `summary: ${hasSummary ? `"${summaryText.slice(0, 300)}"` : "absent"}`,
-    `skills: ${hasSkills ? `${(parsed.skills ?? []).length} listed` : "absent"}`,
-    `experience: ${hasExperience ? `${(parsed.experience ?? []).length} role(s)` : "absent"}`,
-    `education: ${hasEducation ? `${(parsed.education ?? []).length} entry` : "absent"}`,
-    `bullet count: ${bullets.length}`,
-  ].join("\n");
-
-  let metaRaw = "";
-  try {
-    const response = await engine.chat.completions.create({
-      messages: [
-        { role: "system", content: META_SYSTEM_PROMPT },
-        { role: "user", content: `Resume sections:\n${metaContent}` },
-      ],
-      temperature: 0,
-      max_tokens: 256,
-    });
-    metaRaw = response.choices[0]?.message?.content ?? "";
-  } catch (err) {
-    console.warn("[critique-resume] meta pass failed:", err);
-  }
-
-  if (metaRaw.trim()) {
-    // The meta response is a single JSON object — find the first `{…}` block.
-    const firstBrace = metaRaw.indexOf("{");
-    const lastBrace = metaRaw.lastIndexOf("}");
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
-      const obj = tryParseJson(metaRaw.slice(firstBrace, lastBrace + 1));
-      if (obj !== null) {
-        const coerced = coerceMeta(obj);
-        missingSections = coerced.missingSections;
-        summaryFeedback = coerced.summaryFeedback;
-      }
-    }
-  }
-
+  const bulletFindings = await runBulletPass(bullets, engine);
+  const { missingSections, summaryFeedback } = await runMetaPass(
+    parsed,
+    bullets.length,
+    engine,
+  );
   return { bulletFindings, missingSections, summaryFeedback };
 }

@@ -36,18 +36,23 @@ const CAUSE_COPY: Record<LayoutTrigger, string> = {
     "the custom font encoding doesn't decode to characters for a generic extractor",
 };
 
+/** Headline copy builder per disagreement kind. */
+const HEADLINE_FOR: Record<
+  ParseDisagreement["kind"],
+  (d: ParseDisagreement) => string
+> = {
+  dropped_role: (d) =>
+    `An ATS likely drops ${dropCount(d)} of your ${d.llmValue} roles`,
+  merged_roles: (d) =>
+    `An ATS likely merges your ${d.llmValue} roles into ${d.heuristicValue}`,
+  dropped_section: (d) =>
+    `An ATS likely drops your entire ${sectionLabel(d.field)} section`,
+  missing_field: (d) => `An ATS likely misses your ${fieldLabel(d.field)}`,
+};
+
 /** Short headline per disagreement kind + field. */
 function headlineFor(d: ParseDisagreement): string {
-  switch (d.kind) {
-    case "dropped_role":
-      return `An ATS likely drops ${dropCount(d)} of your ${d.llmValue} roles`;
-    case "merged_roles":
-      return `An ATS likely merges your ${d.llmValue} roles into ${d.heuristicValue}`;
-    case "dropped_section":
-      return `An ATS likely drops your entire ${sectionLabel(d.field)} section`;
-    case "missing_field":
-      return `An ATS likely misses your ${fieldLabel(d.field)}`;
-  }
+  return HEADLINE_FOR[d.kind](d);
 }
 
 /** How many roles were lost: LLM count minus heuristic count. */
@@ -181,25 +186,42 @@ function DisagreementRow({ d }: { d: ParseDisagreement }) {
   );
 }
 
+interface DiffSides {
+  heuristic: string;
+  llm: string;
+}
+
+/** Pluralize `noun` against a string count ("1" → singular). */
+function pluralize(count: string, noun: string): string {
+  return `${count} ${noun}${count === "1" ? "" : "s"}`;
+}
+
+/** Role-count gap sides ("2 roles | 4 roles"). Shared by dropped/merged. */
+function roleSides(d: ParseDisagreement): DiffSides {
+  return {
+    heuristic: pluralize(d.heuristicValue ?? "0", "role"),
+    llm: pluralize(d.llmValue ?? "—", "role"),
+  };
+}
+
+/** Side-value builder per disagreement kind. */
+const SIDE_VALUES: Record<
+  ParseDisagreement["kind"],
+  (d: ParseDisagreement) => DiffSides
+> = {
+  dropped_role: roleSides,
+  merged_roles: roleSides,
+  dropped_section: (d) => ({
+    heuristic: "(not found)",
+    llm: pluralize(d.llmValue ?? "—", "item"),
+  }),
+  missing_field: (d) => ({ heuristic: "(not found)", llm: d.llmValue ?? "—" }),
+};
+
 /** Copy for the two sides of the diff, tuned per kind so a count gap reads as
  *  "2 roles | 4 roles" and a missing scalar reads "(not found) | jane@…". */
-function sideValues(d: ParseDisagreement): { heuristic: string; llm: string } {
-  const llm = d.llmValue ?? "—";
-  switch (d.kind) {
-    case "dropped_role":
-    case "merged_roles":
-      return {
-        heuristic: `${d.heuristicValue ?? "0"} role${d.heuristicValue === "1" ? "" : "s"}`,
-        llm: `${llm} role${llm === "1" ? "" : "s"}`,
-      };
-    case "dropped_section":
-      return {
-        heuristic: "(not found)",
-        llm: `${llm} item${llm === "1" ? "" : "s"}`,
-      };
-    case "missing_field":
-      return { heuristic: "(not found)", llm };
-  }
+function sideValues(d: ParseDisagreement): DiffSides {
+  return SIDE_VALUES[d.kind](d);
 }
 
 /**

@@ -58,40 +58,45 @@ export interface DisagreementController {
   run: () => Promise<void>;
 }
 
+/** CTA copy keyed off the status lifecycle (idle is the default fallback). */
+const DISAGREEMENT_LABELS: Record<DisagreementStatus["kind"], string> = {
+  idle: "Check what an ATS misses",
+  loading: "Loading model…",
+  running: "Comparing parses…",
+  done: "Compare again",
+  error: "Try again",
+};
+
 /** Label for the CTA across the status lifecycle. */
 export function labelForDisagreement(status: DisagreementStatus): string {
-  switch (status.kind) {
-    case "loading":
-      return "Loading model…";
-    case "running":
-      return "Comparing parses…";
-    case "done":
-      return "Compare again";
-    case "error":
-      return "Try again";
-    default:
-      return "Check what an ATS misses";
-  }
+  return DISAGREEMENT_LABELS[status.kind];
 }
 
-/** Count disagreements per kind for the anonymized telemetry event. */
-function tallyKinds(disagreements: readonly ParseDisagreement[]): {
+interface KindTally {
   droppedRole: number;
   droppedSection: number;
   missingField: number;
   mergedRoles: number;
-} {
-  let droppedRole = 0;
-  let droppedSection = 0;
-  let missingField = 0;
-  let mergedRoles = 0;
-  for (const d of disagreements) {
-    if (d.kind === "dropped_role") droppedRole++;
-    else if (d.kind === "dropped_section") droppedSection++;
-    else if (d.kind === "missing_field") missingField++;
-    else if (d.kind === "merged_roles") mergedRoles++;
-  }
-  return { droppedRole, droppedSection, missingField, mergedRoles };
+}
+
+/** Maps each disagreement kind to its tally field. */
+const TALLY_FIELD: Record<ParseDisagreement["kind"], keyof KindTally> = {
+  dropped_role: "droppedRole",
+  dropped_section: "droppedSection",
+  missing_field: "missingField",
+  merged_roles: "mergedRoles",
+};
+
+/** Count disagreements per kind for the anonymized telemetry event. */
+function tallyKinds(disagreements: readonly ParseDisagreement[]): KindTally {
+  const tally: KindTally = {
+    droppedRole: 0,
+    droppedSection: 0,
+    missingField: 0,
+    mergedRoles: 0,
+  };
+  for (const d of disagreements) tally[TALLY_FIELD[d.kind]]++;
+  return tally;
 }
 
 export function useParseDisagreement(

@@ -67,20 +67,18 @@ export interface CritiqueController {
 
 // ── CTA labels ────────────────────────────────────────────────────────────────
 
+/** CTA copy keyed off the status lifecycle (idle is the default fallback). */
+const CRITIQUE_LABELS: Record<CritiqueStatus["kind"], string> = {
+  idle: "Judge resume quality",
+  loading: "Loading model…",
+  running: "Judging content…",
+  done: "Run again",
+  error: "Try again",
+};
+
 /** CTA label for the run button across the status lifecycle. */
 export function labelForCritique(status: CritiqueStatus): string {
-  switch (status.kind) {
-    case "loading":
-      return "Loading model…";
-    case "running":
-      return "Judging content…";
-    case "done":
-      return "Run again";
-    case "error":
-      return "Try again";
-    default:
-      return "Judge resume quality";
-  }
+  return CRITIQUE_LABELS[status.kind];
 }
 
 // ── Hook ──────────────────────────────────────────────────────────────────────

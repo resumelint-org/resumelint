@@ -28,19 +28,17 @@ import type { EscapeHatchController, EscapeHatchStatus } from "../../hooks/useLl
 import type { LlmParsedResume } from "../../lib/webllm/parse-resume.ts";
 import { useEffect } from "react";
 
+/** CTA copy keyed off the status lifecycle (idle is the default fallback). */
+const CTA_LABELS: Record<EscapeHatchStatus["kind"], string> = {
+  idle: "Try a local AI pass",
+  loading: "Loading model…",
+  running: "Parsing with on-device AI…",
+  done: "Re-run AI recovery",
+  error: "Try again",
+};
+
 function ctaLabel(status: EscapeHatchStatus): string {
-  switch (status.kind) {
-    case "loading":
-      return "Loading model…";
-    case "running":
-      return "Parsing with on-device AI…";
-    case "done":
-      return "Re-run AI recovery";
-    case "error":
-      return "Try again";
-    default:
-      return "Try a local AI pass";
-  }
+  return CTA_LABELS[status.kind];
 }
 
 interface LlmEscapeHatchBannerProps {
