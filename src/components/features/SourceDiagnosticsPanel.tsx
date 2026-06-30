@@ -12,13 +12,18 @@
  * The control is a peer toggle (segmented control), not a second <Tabs>: these
  * are peer views of the same source, visually subordinate to the primary tab
  * strip. It is built from the <Button> primitive (no raw <button>), active state
- * via semantic tokens. Render-vs-hide: simple conditional render — none of the
- * three evidence panels hold cross-switch local state worth preserving.
+ * via semantic tokens.
+ *
+ * Render-vs-hide: all three panels stay mounted and the inactive ones are
+ * toggled off with the `hidden` attribute (mirroring the <Tabs> primitive's own
+ * TabPanel). Keeping SourcePdfPanel mounted matters — PdfPreview re-runs the
+ * pdfjs getDocument + canvas render on every mount, so a conditional render
+ * would re-rasterize the PDF (and flash) each time the user returns to it.
  */
 
 import { useState } from "react";
 import type { CascadeResult, LayoutTrigger } from "../../lib/heuristics/types.ts";
-import { Button } from "@design-system";
+import { Button, CountBadge } from "@design-system";
 import { LayoutFlagsList } from "./LayoutFlagsList.tsx";
 import { SourcePdfPanel, ExtractedTextPanel } from "./EvidencePanel.tsx";
 
@@ -68,15 +73,17 @@ export function SourceDiagnosticsPanel({
         </SegmentButton>
       </div>
 
-      {segment === "pdf" && (
+      <div hidden={segment !== "pdf"}>
         <SourcePdfPanel bytes={bytes} sourceKind={sourceKind} />
-      )}
-      {segment === "extracted" && <ExtractedTextPanel result={result} />}
-      {segment === "flags" && (
+      </div>
+      <div hidden={segment !== "extracted"}>
+        <ExtractedTextPanel result={result} />
+      </div>
+      <div hidden={segment !== "flags"}>
         <LayoutFlagsList
           triggers={result.triggers as readonly LayoutTrigger[]}
         />
-      )}
+      </div>
     </div>
   );
 }
@@ -104,11 +111,7 @@ function SegmentButton({
       className={`rounded px-3 py-1 text-sm ${activeCls}`}
     >
       {children}
-      {count != null && count > 0 && (
-        <span className="ml-1.5 rounded-full bg-surface-subtle px-1.5 text-xs text-content-secondary">
-          {count}
-        </span>
-      )}
+      <CountBadge count={count} />
     </Button>
   );
 }
