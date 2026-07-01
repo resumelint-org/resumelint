@@ -74,11 +74,20 @@ export type AnalysisStatus =
 export interface AnalysisController {
   status: AnalysisStatus;
   /**
-   * `false` hides every surface (no WebGPU, or no text to analyze). The
-   * "What an ATS misses" and "Resume quality" tabs are silently absent in
-   * that case — matches the per-tab silent absence of the prior controllers.
+   * `false` hides the live analysis surface (no WebGPU, or no text to
+   * analyze). When it's false *because* WebGPU is unavailable, the tab now
+   * renders `WebGpuUnavailableNotice` instead of vanishing (#276) — the caller
+   * distinguishes the two via `capability` + `hasText` below.
    */
   isAvailable: boolean;
+  /**
+   * WebGPU detection outcome (`null` until it resolves). Exposed so the tab can
+   * tell "browser can't run on-device AI" (show the explainer) from "no résumé
+   * text to analyze" (show nothing). See #276.
+   */
+  capability: WebGpuCapability | null;
+  /** Whether there's extractable text to analyze (independent of WebGPU). */
+  hasText: boolean;
   /** True while the model is loading or the inference is in flight. */
   isBusy: boolean;
   /** Start the opt-in combined analysis. No-op while already busy. */
@@ -240,5 +249,5 @@ export function useResumeAnalysisLlm(
 
   const isAvailable = capability === "available" && hasText;
 
-  return { status, isAvailable, isBusy, run };
+  return { status, isAvailable, capability, hasText, isBusy, run };
 }

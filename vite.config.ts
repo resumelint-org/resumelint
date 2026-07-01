@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import basicSsl from "@vitejs/plugin-basic-ssl";
 
 // Token-values swap seam. `src/styles.css` imports the raw `--color-*` values
 // via the bare `@design-tokens` specifier; this alias points it at the in-tree
@@ -120,13 +121,22 @@ export default defineConfig({
   appType: "mpa",
   server: {
     // Bind 0.0.0.0 so the dev server is reachable from other machines on the
-    // LAN (e.g. http://<your-host>.local:5173/), not just loopback.
+    // LAN (e.g. https://<your-host>.local:5173/), not just loopback.
     host: true,
     // Allow LAN mDNS hostnames through Vite's DNS-rebind host check.
     // ".local" matches any *.local host.
     allowedHosts: [".local"],
   },
   plugins: [
+    // Serve dev/preview over HTTPS with a throwaway self-signed cert. WebGPU —
+    // which WebLLM needs — is gated behind a *secure context*: HTTPS, or the
+    // localhost exemption. Over plain http:// a LAN client (e.g.
+    // http://<host>.local:5173 from another machine) is NOT a secure context,
+    // so navigator.gpu is hidden and the on-device rewrite path silently
+    // disables (detectWebGpu → "no-webgpu"). TLS gives every LAN client a
+    // secure context; the cert is untrusted, so each client accepts a one-time
+    // browser warning — encryption and the secure-context flag hold regardless.
+    basicSsl(),
     tailwindcss(),
     react(),
     emitVersionJson(APP_VERSION),

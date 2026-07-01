@@ -22,6 +22,7 @@ import { useEditableParse } from "../../hooks/useEditableParse.ts";
 import type { CascadeResult } from "../../lib/heuristics/types.ts";
 import type { AnonymousAtsScore } from "../../lib/score/score.ts";
 import type { AnalysisController } from "../../hooks/useResumeAnalysisLlm.ts";
+import type { WebGpuCapability } from "../../lib/webllm/types.ts";
 import type { ResumeCritique } from "../../lib/webllm/critique-resume.ts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT =
@@ -47,10 +48,20 @@ function result(summary?: string): CascadeResult {
 
 const score = { overall: 60, verdict: "Getting There" } as unknown as AnonymousAtsScore;
 
-function controller(isAvailable: boolean): AnalysisController {
+interface ControllerOpts {
+  isAvailable: boolean;
+  capability?: WebGpuCapability | null;
+  hasText?: boolean;
+}
+
+function controller(opts: ControllerOpts): AnalysisController {
   return {
     status: { kind: "done", disagreements: [], critique: EMPTY_CRITIQUE },
-    isAvailable,
+    isAvailable: opts.isAvailable,
+    // Default to the coherent pairing (available ⇒ has GPU + text) unless a
+    // test overrides to exercise the unavailable-with-notice branch.
+    capability: opts.capability ?? (opts.isAvailable ? "available" : null),
+    hasText: opts.hasText ?? opts.isAvailable,
     isBusy: false,
     run: () => Promise.resolve(),
   } as unknown as AnalysisController;
@@ -59,7 +70,7 @@ function controller(isAvailable: boolean): AnalysisController {
 let container: HTMLDivElement;
 let root: Root;
 
-function Host({ isAvailable, summary }: { isAvailable: boolean; summary?: string }) {
+function Host({ opts, summary }: { opts: ControllerOpts; summary?: string }) {
   const edit = useEditableParse();
   const res = result(summary);
   return createElement(ResultDetailTabs, {
@@ -68,17 +79,17 @@ function Host({ isAvailable, summary }: { isAvailable: boolean; summary?: string
     result: res,
     sourceKind: "pdf",
     edit,
-    analysis: controller(isAvailable),
+    analysis: controller(opts),
     triggerCount: res.triggers.length,
   });
 }
 
-function render(isAvailable: boolean, summary?: string) {
+function render(opts: ControllerOpts, summary?: string) {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
   act(() => {
-    root.render(createElement(Host, { isAvailable, summary }));
+    root.render(createElement(Host, { opts, summary }));
   });
   return container;
 }
@@ -89,15 +100,18 @@ afterEach(() => {
 });
 
 describe("ResultDetailTabs", () => {
-  it("shows only reconstructed + diagnostics when analysis is unavailable", () => {
-    const el = render(false);
+  it("hides the Resume Quality tab while capability is still detecting / no text", () => {
+    const el = render({ isAvailable: false });
     expect(el.textContent).toContain("Reconstructed resume");
     expect(el.textContent).toContain("Source & diagnostics");
     expect(el.textContent).not.toContain("Resume Quality");
   });
 
   it("mounts the single Resume Quality tab (2nd position) when analysis is available", () => {
-    const el = render(true, "Senior engineer with a track record of shipping.");
+    const el = render(
+      { isAvailable: true },
+      "Senior engineer with a track record of shipping.",
+    );
     const labels = Array.from(el.querySelectorAll('[role="tab"]')).map(
       (t) => t.textContent ?? "",
     );
@@ -106,5 +120,20 @@ describe("ResultDetailTabs", () => {
     expect(labels[0]).toContain("Reconstructed resume");
     expect(labels[1]).toContain("Resume Quality");
     expect(labels[2]).toContain("Source & diagnostics");
+  });
+
+  it("keeps the Resume Quality tab (warn-marked) with the notice when WebGPU is unavailable", () => {
+    const el = render(
+      { isAvailable: false, capability: "no-webgpu", hasText: true },
+      "Senior engineer with a track record of shipping.",
+    );
+    const qualityTab = Array.from(el.querySelectorAll('[role="tab"]')).find((t) =>
+      (t.textContent ?? "").includes("Resume Quality"),
+    );
+    expect(qualityTab).toBeDefined();
+    // Warn marker is announced, not colour-only.
+    expect(qualityTab?.textContent).toContain("setup needed");
+    // The panel explains the unavailability in place instead of vanishing.
+    expect(el.textContent).toContain("On-device AI isn't available");
   });
 });

@@ -4,6 +4,7 @@
 import { CASCADE_VERSION } from "./heuristics/types";
 import type { LayoutTrigger, ParseEvent } from "./heuristics/types";
 import type { WebGpuCapability } from "./webllm/types";
+import type { Browser, Os } from "./webllm/platform";
 import type { AtsPlatform } from "./jd-match/fetch-jd";
 
 type PostHog = {
@@ -303,6 +304,28 @@ export function trackWebllmCapabilityDetected(
   capability: WebGpuCapability,
 ): void {
   track("webllm_capability_detected", { capability });
+}
+
+/**
+ * The WebGPU-unavailable explainer notice was shown (#276). Fires once per page
+ * when `detectWebGpu()` resolves to a non-`"available"` state and the notice
+ * renders in place of the rewrite UI. Sliced by the detected browser + os so we
+ * can size which populations hit the wall (Firefox-macOS vs Linux-no-Vulkan vs
+ * old-Safari) and judge whether the per-browser guidance is worth maintaining.
+ * `webllm_capability_detected` already carries `capability` but no platform —
+ * this is the platform-bearing companion, not a duplicate. No PII: browser/os
+ * are coarse enums.
+ */
+export function trackWebllmNoticeShown(args: {
+  capability: WebGpuCapability;
+  browser: Browser;
+  os: Os;
+}): void {
+  track("webllm_notice_shown", {
+    capability: args.capability,
+    browser: args.browser,
+    os: args.os,
+  });
 }
 
 export function trackWebllmDownloadStarted(args: { model: string }): void {

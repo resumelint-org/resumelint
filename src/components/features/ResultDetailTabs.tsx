@@ -6,6 +6,7 @@ import { Card, Tabs, TabList, Tab, TabPanel } from "@design-system";
 import { ReconstructedResume } from "./ReconstructedResume.tsx";
 import { ResumeQualityPanel } from "./ResumeQualityPanel.tsx";
 import { SourceDiagnosticsPanel } from "./SourceDiagnosticsPanel.tsx";
+import { WebGpuUnavailableNotice } from "./WebGpuUnavailableNotice.tsx";
 import type { CascadeResult } from "../../lib/heuristics/types.ts";
 import type { AnonymousAtsScore } from "../../lib/score/score.ts";
 import type { EditableParse } from "../../hooks/useEditableParse.ts";
@@ -40,6 +41,19 @@ export function ResultDetailTabs({
   // `tab` state lives here — only used within this component, not in ParsedCard.
   const [tab, setTab] = useState("reconstructed");
 
+  // The "Resume Quality" tab is the canonical on-device-AI surface (#276). It
+  // shows whenever there's résumé text to analyze — either running the live
+  // analysis (WebGPU available) OR, when WebGPU can't run here, explaining that
+  // in place instead of silently vanishing. `capability === null` (still
+  // detecting) and "no text" both leave the tab absent, as before.
+  const unavailableCapability =
+    analysis.hasText &&
+    analysis.capability !== null &&
+    analysis.capability !== "available"
+      ? analysis.capability
+      : null;
+  const showQualityTab = analysis.isAvailable || unavailableCapability !== null;
+
   return (
     /* Detail sits behind tabs in its own card so only one panel shows at a
        time and every panel is advertised by a label (issue #177). All panels
@@ -56,7 +70,11 @@ export function ResultDetailTabs({
             without opening it. */}
         <TabList aria-label="Parsed result views">
           <Tab id="reconstructed">Reconstructed resume</Tab>
-          {analysis.isAvailable && <Tab id="quality">Resume Quality</Tab>}
+          {showQualityTab && (
+            <Tab id="quality" warn={!analysis.isAvailable}>
+              Resume Quality
+            </Tab>
+          )}
           <Tab id="diagnostics" count={triggerCount}>
             Source &amp; diagnostics
           </Tab>
@@ -71,17 +89,26 @@ export function ResultDetailTabs({
               jdContext={jdContext}
             />
           </TabPanel>
-          {analysis.isAvailable && (
+          {showQualityTab && (
             <TabPanel id="quality">
-              {/* onGoToRewrite: switch back to reconstructed tab where the
-                  per-role wand button (#3 / useSectionRewrite) already lives.
-                  The quality panel links each flagged bullet to this affordance
-                  instead of building a parallel rewrite UI (issue #244, #273). */}
-              <ResumeQualityPanel
-                controller={analysis}
-                result={activeResult}
-                onGoToRewrite={() => setTab("reconstructed")}
-              />
+              {analysis.isAvailable ? (
+                /* onGoToRewrite: switch back to reconstructed tab where the
+                   per-role wand button (#3 / useSectionRewrite) already lives.
+                   The quality panel links each flagged bullet to this affordance
+                   instead of building a parallel rewrite UI (issue #244, #273). */
+                <ResumeQualityPanel
+                  controller={analysis}
+                  result={activeResult}
+                  onGoToRewrite={() => setTab("reconstructed")}
+                />
+              ) : (
+                /* WebGPU can't run here — explain in place instead of hiding
+                   the tab (#276). `unavailableCapability` is non-null whenever
+                   this branch renders (see showQualityTab). */
+                unavailableCapability && (
+                  <WebGpuUnavailableNotice capability={unavailableCapability} />
+                )
+              )}
             </TabPanel>
           )}
           <TabPanel id="diagnostics">

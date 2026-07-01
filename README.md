@@ -54,6 +54,26 @@ locally instead of on the PR.
 - The hook install is a no-op on tarball installs and CI `npm ci` (no
   `.git/` work tree), so it never breaks a non-developer install.
 
+### On-device AI (WebGPU) in dev
+
+The optional AI rewrite runs on-device via WebGPU, which the browser only
+exposes in a **secure context** (HTTPS, or the `localhost`/`127.0.0.1`
+exemption). The dev/preview server therefore runs over HTTPS with a throwaway
+self-signed cert (`@vitejs/plugin-basic-ssl`), so WebGPU is available at
+`https://localhost:5173` and when you reach the server from another machine on
+the LAN — e.g. `https://<your-host>.local:5173`. The cert is untrusted, so each
+client accepts a one-time browser warning; encryption and the secure-context
+flag hold regardless. Over plain `http://` a non-localhost origin is **not** a
+secure context, `navigator.gpu` is hidden, and the rewrite path degrades to the
+"WebGPU unavailable" notice.
+
+WebGPU also needs a GPU adapter, not just a secure context. On **Linux**,
+Chromium rides the Vulkan backend — if `chrome://gpu` shows `Vulkan: Disabled`,
+`navigator.gpu.requestAdapter()` returns null and the notice shows the
+`unsupported-os` guidance. Enable it via `chrome://flags/#enable-vulkan` →
+Enabled → relaunch. (The hosted site is HTTPS, so real users only hit the
+adapter question, never the secure-context one.)
+
 ## Debugging the parser
 
 ```bash

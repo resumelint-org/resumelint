@@ -122,9 +122,16 @@ interface TabProps {
   children: ReactNode;
   /** Optional count badge rendered after the label (e.g. layout-flag count). */
   count?: number;
+  /**
+   * Render a small warning dot after the label — for a tab whose content is in
+   * a degraded / needs-attention state (e.g. the on-device-AI tab when WebGPU
+   * is unavailable, #276). Paired with a visually-hidden label so the state
+   * isn't conveyed by colour alone.
+   */
+  warn?: boolean;
 }
 
-export function Tab({ id, children, count }: TabProps) {
+export function Tab({ id, children, count, warn }: TabProps) {
   const { value, onValueChange, baseId } = useTabsContext("Tab");
   const isActive = value === id;
   const activeCls = isActive
@@ -145,6 +152,17 @@ export function Tab({ id, children, count }: TabProps) {
     >
       {children}
       <CountBadge count={count} />
+      {warn && (
+        <>
+          {/* U+26A0 + U+FE0E (VS-15) forces TEXT presentation so the glyph
+              renders monochrome (tinted by the warning token), not as a colour
+              emoji — the codebase's no-emoji-as-icon rule. */}
+          <span aria-hidden="true" className="ml-1.5 text-feedback-warning-text">
+            {"⚠︎"}
+          </span>
+          <span className="sr-only"> (setup needed)</span>
+        </>
+      )}
     </Button>
   );
 }

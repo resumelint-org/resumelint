@@ -47,7 +47,14 @@ const allKindsDisagreements: ParseDisagreement[] = [
 ];
 
 function controller(status: AnalysisController["status"]): AnalysisController {
-  return { status, isAvailable: true, isBusy: false, run: () => Promise.resolve() };
+  return {
+    status,
+    isAvailable: true,
+    capability: "available",
+    hasText: true,
+    isBusy: false,
+    run: () => Promise.resolve(),
+  };
 }
 
 let container: HTMLDivElement;
