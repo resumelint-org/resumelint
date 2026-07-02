@@ -1,0 +1,49 @@
+name: Promote main → release (prod gate)
+
+# Advances the `release` branch (Cloudflare Pages production source, served at
+# resumelint.org) to the latest `main` SHA — but only when the full local CI
+# gate (`npm run verify`) passes on that commit. Runs once a day, and on manual
+# dispatch. If verify fails, `release` stays on the last good commit, so prod
+# holds a known-good build while `main` (dev.resumelint.org, via GitHub Pages)
+# keeps taking every push.
+#
+# No secrets: pushes to `release` with the built-in GITHUB_TOKEN. Cloudflare
+# pulls the repo itself via its GitHub App, so nothing here needs a CF token.
+
+on:
+  schedule:
+    # 14:00 UTC daily. Scheduled runs always execute against the default
+    # branch (main) HEAD, which is exactly the commit we gate + promote.
+    - cron: '0 14 * * *'
+  workflow_dispatch:
+
+# Serialize: never let two promotions race on the release ref.
+concurrency:
+  group: promote-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history so `npm run verify`'s fallow diff gate (--base
+          # origin/main) has a base to compare against.
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - run: npm ci
+      # The quality gate. Mirrors the pre-push hook and ci.yml exactly:
+      # typecheck → lint → coverage (incl. corpus/score snapshots) → build →
+      # fallow. A non-zero exit here means "not shippable" and the promote
+      # step below is skipped, leaving release untouched.
+      - name: Quality gate (npm run verify)
+        run: npm run verify
+      - name: Advance release → this commit
+        run: git push origin "HEAD:refs/heads/release"
