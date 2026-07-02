@@ -78,6 +78,7 @@ import {
   SkillsSection,
 } from "./ReconstructedEducationSkills.tsx";
 import { Button, EditableField } from "@design-system";
+import { SECTION_IDS } from "../../lib/anchors.ts";
 import { useDownloadPdf } from "../../hooks/useDownloadPdf.ts";
 
 // ── Attention strip ────────────────────────────────────────────────────────────
@@ -887,7 +888,7 @@ export function ReconstructedResume({
 
   return (
     <section
-      id="reconstructed-resume"
+      id={SECTION_IDS.reconstructed}
       className="scroll-mt-6 flex flex-col gap-6"
     >
       <div className="flex flex-col gap-2">
