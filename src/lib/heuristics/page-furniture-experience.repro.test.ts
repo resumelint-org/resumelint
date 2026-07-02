@@ -58,10 +58,12 @@ describe("#283 — page footer bleeds into experience roles across page breaks",
     expect(kasa.title).toBe(
       "Founding Member & Director of Infrastructure Division",
     );
-    // Company leads with the real org "Kasa" (this two-column fixture folds the
-    // right-column location onto the company line for every role; the #283 fix
-    // is about the footer no longer displacing it, not about location splitting).
-    expect(kasa.company?.startsWith("Kasa")).toBe(true);
+    // This two-column fixture folds the right-column location onto the company
+    // line for every role. #283 stopped the footer from displacing it; #287 then
+    // split the folded location off, so company is the clean org and the folded
+    // "Seoul, S.Korea" lands in `location` (Pass D of stripLocationSuffix).
+    expect(kasa.company).toBe("Kasa");
+    expect(kasa.location).toBe("Seoul, S.Korea");
     expect(kasa.start_date).toBe("Jun. 2018");
     expect(kasa.end_date).toBe("Jan. 2021");
   });

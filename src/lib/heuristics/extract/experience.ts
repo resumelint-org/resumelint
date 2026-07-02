@@ -116,8 +116,11 @@ function looksLikeLocationTail(after: string): boolean {
  *   Pass C — comma-delimited international "…, City, Country": validates the
  *     trailing token against `COUNTRY_GAZETTEER` (closed ~249-entry ISO set +
  *     colloquial aliases) to avoid false-matching any capitalized word.
- *     Space-delimited intl is NOT attempted here — multi-word countries make
- *     space boundaries too ambiguous (deferred to a follow-up issue).
+ *   Pass D — space-delimited international "…Company City, Country" (#287): the
+ *     two-column fold where the location is glued onto the company line with no
+ *     comma before the city ("Kasa Seoul, S.Korea"). Single-token city only and
+ *     a closed-vocabulary country, mirroring Pass B's US guards; tried last so
+ *     the comma-delimited passes win first.
  *
  * Conservative design choices shared by all passes:
  *   - The state/country suffix must be in a closed vocabulary (US_STATE_CODE_RE
@@ -133,6 +136,18 @@ function looksLikeLocationTail(after: string): boolean {
  *  artifact, never real company text. */
 function stripDanglingSeparator(s: string): string {
   return s.replace(/[\s,–—\-|·]+$/, "").trim();
+}
+
+/** A comma-delimited intl "city" (Pass C group 1) whose FIRST token is a legal
+ *  suffix ("Ltd.") or an all-caps org acronym ("MND") is company text carried
+ *  past a company-internal comma — not a city — so that comma is not the
+ *  company/city boundary. Reject it in Pass C so the space-delimited Pass D
+ *  peels only the real trailing single-token city:
+ *  "Omnious. Co., Ltd. Seoul, S.Korea" → company "Omnious. Co., Ltd." +
+ *  "Seoul, S.Korea", not company "Omnious. Co." + "Ltd. Seoul, S.Korea" (#287). */
+function cityStartsWithCompanyText(city: string): boolean {
+  const first = city.split(/\s+/)[0];
+  return LEGAL_SUFFIX_RE.test(first) || /^[A-Z]{2,}$/.test(first);
 }
 
 function stripLocationSuffix(s: string): {
@@ -161,9 +176,38 @@ function stripLocationSuffix(s: string): {
     const INTL_SUFFIX_RE =
       /,\s*([A-Z][A-Za-z.\-]+(?:\s+[A-Z][A-Za-z.\-]+)*),\s*([A-Z][A-Za-z.\-]+(?:\s+[A-Z][A-Za-z.\-]+)*)$/;
     const mIntl = s.match(INTL_SUFFIX_RE);
-    if (mIntl && COUNTRY_GAZETTEER.has(mIntl[2].toLowerCase())) {
+    if (
+      mIntl &&
+      COUNTRY_GAZETTEER.has(mIntl[2].toLowerCase()) &&
+      !cityStartsWithCompanyText(mIntl[1])
+    ) {
       const before = stripDanglingSeparator(s.slice(0, mIntl.index));
       if (before) return { text: before, location: `${mIntl[1]}, ${mIntl[2]}` };
+    }
+
+    // Pass D — space-delimited international "…Company City, Country" (#287).
+    // Two-column templates (Awesome-CV) fold the right-column location onto the
+    // company line with no comma between company and city ("Kasa Seoul, S.Korea"),
+    // so Pass C (which needs a comma before the city) misses it. This is the
+    // space-delimited intl case Pass C deferred: it's admissible here only under
+    // the same tight guards Pass B uses for US "City, ST" —
+    //   - single-token city (space boundary; a multi-word space-fold city like
+    //     "Google Mexico City" is genuinely ambiguous with a subsidiary name and
+    //     stays deferred), and
+    //   - a closed-vocabulary country (COUNTRY_GAZETTEER), not any capitalized
+    //     word — so it fires on a real "City, Country" fold, not on a company
+    //     that merely ends in a comma tail.
+    // Tried after Pass C so a genuine comma-delimited multi-word city
+    // ("…, Mexico City, Mexico") is still captured whole; Pass D then peels the
+    // single-token fold Pass C skipped (including the company-internal-comma case
+    // "…Co., Ltd. Seoul, S.Korea" that Pass C's guard rejected).
+    const SPACE_INTL_RE =
+      /\s+([A-Z][A-Za-z.\-]+),\s*([A-Z][A-Za-z.\-]+(?:\s+[A-Z][A-Za-z.\-]+)*)$/;
+    const mSpaceIntl = s.match(SPACE_INTL_RE);
+    if (mSpaceIntl && COUNTRY_GAZETTEER.has(mSpaceIntl[2].toLowerCase())) {
+      const before = stripDanglingSeparator(s.slice(0, mSpaceIntl.index));
+      if (before)
+        return { text: before, location: `${mSpaceIntl[1]}, ${mSpaceIntl[2]}` };
     }
   }
 
