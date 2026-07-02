@@ -1,6 +1,8 @@
 # resumelint
 
-**Live preview:** <https://resumelint.org>
+**Try it:** [resumelint.org](https://resumelint.org) — stable, promoted daily once
+CI is green · [dev.resumelint.org](https://dev.resumelint.org) — bleeding edge,
+updated on every push
 
 A PDF parser stress test for resumes. Drop a PDF in; see what a generic
 text extractor reads back. It is diagnostic, not prescriptive — the tool
