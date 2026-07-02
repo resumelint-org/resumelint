@@ -9,6 +9,7 @@
 
 import type { AnonymousAtsScore } from "../../lib/score/score.ts";
 import { getScoreTier } from "../../lib/score/score.ts";
+import type { SectionAnchor } from "../../lib/anchors.ts";
 import { getScoreRecommendation } from "../../lib/score/recommendation.ts";
 import { ScoreRing } from "./ScoreRing.tsx";
 import { VerdictHeader } from "./VerdictHeader.tsx";
@@ -23,7 +24,9 @@ interface DimensionProps {
   max: number;
   gradable: boolean;
   hint: string;
-  anchor: string;
+  /** Hash-prefixed scroll target — narrowed to a known section so a dead link
+   *  (a `#foo` with no matching rendered id) is a compile error (#153). */
+  anchor: SectionAnchor;
 }
 
 function Dimension({
@@ -133,7 +136,7 @@ export function AtsScoreReadout({ score }: AtsScoreReadoutProps) {
             max={score.specificity.max}
             gradable={score.specificity.gradable}
             hint={specificityHint}
-            anchor="#per-bullet-feedback"
+            anchor="#reconstructed-resume"
           />
           <Dimension
             label="Structure"
@@ -141,7 +144,7 @@ export function AtsScoreReadout({ score }: AtsScoreReadoutProps) {
             max={score.structure.max}
             gradable={score.structure.gradable}
             hint={structureHint}
-            anchor="#per-bullet-feedback"
+            anchor="#reconstructed-resume"
           />
           <Dimension
             label="Completeness"
