@@ -30,6 +30,7 @@
 import type { CascadeResult } from "../../lib/heuristics/types.ts";
 import { applyContactOverrides, buildContactFields } from "../../lib/contact.ts";
 import { Card, EditableField } from "@design-system";
+import { SECTION_IDS } from "../../lib/anchors.ts";
 import type { ContactOverrides } from "../../hooks/useEditableParse.ts";
 import { ContactDetails } from "./ContactDetails.tsx";
 
@@ -64,7 +65,7 @@ export function ContactCard({
     onFieldChange?.(key, v);
 
   return (
-    <Card id="contact" className="scroll-mt-6 text-center">
+    <Card id={SECTION_IDS.contact} className="scroll-mt-6 text-center">
       {/* Name heading — the immediate "whose resume" anchor. */}
       <h2 className="text-lg font-semibold text-content-primary">
         {editable ? (
