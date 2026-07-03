@@ -49,8 +49,36 @@
     // types a caller needs to type `runCascade` / `extractJdTerms` — even where
     // the in-tree app imports those types from deeper paths. Re-exports with no
     // in-repo consumer are the intended external surface, not dead code.
-    { "file": "src/lib/heuristics/index.ts", "exports": ["*"] },
-    { "file": "src/lib/jd-match/index.ts", "exports": ["*"] },
+    //
+    // Enumerated (not `["*"]`) on purpose: `*` would silence the unused-export
+    // check for the whole file, so a *future* accidentally-dead re-export added
+    // here would go unreported. Listing the intended public names keeps that
+    // check live — a new `export { … }` that nothing consumes still trips fallow.
+    // The trade is upkeep when the surface churns; these barrels are stable, so
+    // it's cheap. Keep in sync with the `export`s in each barrel.
+    { "file": "src/lib/heuristics/index.ts", "exports": [
+      "runCascade", "runCascadeFromMarkdown",
+      "RunCascadeOptions", "RunCascadeFromMarkdownOptions",
+      "CANONICAL_CONFIDENCE_THRESHOLD", "EXTRACTION_RATIO_FLOOR",
+      "NAME_CONFIDENCE_FLOOR", "SOFT_PENALTY", "FIELD_CONFIDENCE_TARGETS",
+      "FIELD_WEIGHTS", "TWO_COLUMN_CONFIDENCE_CAP", "getThresholdsFor",
+      "CascadeBranch", "CascadeThresholds", "CASCADE_VERSION",
+      "emitMarkdown", "RenderLine",
+      "CascadeResult", "HeuristicResult", "HeuristicParsedResume",
+      "FieldConfidence", "LayoutProbes", "LayoutTrigger", "EscalationSuggestion",
+      "ExtractionFailureReason", "PdfExtractResult", "PdfLinkAnnotation",
+      "PdfTextItem", "PdfPageInfo", "ParseEvent", "ParseStartedEvent",
+      "TierEngagedEvent", "ParseCompletedEvent", "TierId", "TierEngagementReason",
+      "FinalSource", "FileSizeBucket", "ParseMetadata"
+    ] },
+    { "file": "src/lib/jd-match/index.ts", "exports": [
+      "extractJdTerms", "stripBoilerplate",
+      "ExtractedTerm", "ExtractJdTermsResult", "ExtractOptions",
+      "computeCoverage", "buildCorpus", "SKILL_WEIGHT", "NOUN_WEIGHT",
+      "CoverageResult", "SKILLS", "getSkillIndex", "skillCount", "SkillEntry",
+      "fetchJdFromUrl", "parseAtsUrl", "htmlToPlaintext", "AtsPlatform",
+      "JdMatchResult"
+    ] },
 
     // `ParseMetadata` is the telemetry metadata contract the heuristics barrel
     // re-exports so a host can type the `ParseEvent` payloads it wires to the
