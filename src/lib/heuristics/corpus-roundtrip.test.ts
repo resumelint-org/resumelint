@@ -46,8 +46,8 @@
  * Net effect: the baseline can only shrink. Fix a bug → delete its line.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { readFileSync, readdirSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, it, expect } from "vitest";
@@ -302,32 +302,156 @@ describe("corpus round-trip invariants (#293)", () => {
 /**
  * Dev triage harness — inert in CI, runs ONLY when `RL_RT_PDF=<path>` is set:
  *
- *   RL_RT_PDF=/path/to/real-resume.pdf npx vitest run \
+ *   RL_RT_PDF=/path/to/real-resume.pdf [RL_RT_ROUNDS=2] npx vitest run \
  *     src/lib/heuristics/corpus-roundtrip.test.ts
  *
- * Dumps the per-category parse1-vs-parse3 diff for one arbitrary PDF, so a
- * real (uncommitted, possibly PII-bearing) résumé can be round-trip-audited
- * WITHOUT being committed as a fixture. This is how the education (#291) and
- * summary (#292) regressions were originally localized. Kept out of the corpus
- * gate above precisely because the input may carry PII.
+ * Round-trip-audits one arbitrary PDF, so a real (uncommitted, possibly
+ * PII-bearing) résumé can be triaged WITHOUT being committed as a fixture. This
+ * is how the education (#291) and summary (#292) regressions were originally
+ * localized. Kept out of the corpus gate above precisely because the input may
+ * carry PII.
+ *
+ * `RL_RT_ROUNDS` (default 1) is the number of render→re-parse HOPS:
+ *   - 1 hop  = parse1 → render → parse2                    (2 parses)
+ *   - 2 hops = parse1 → render → parse2 → render → parse3  (3 parses)
+ * A second hop surfaces corruption that only compounds once a reconstructed PDF
+ * is itself re-reconstructed (the parse→export→parse→export→parse cycle).
+ *
+ * Unlike the corpus gate above (which asserts field MAPPING, never dumping
+ * values), this harness prints per-hop field-level VALUE diffs (before → after)
+ * so the exact corruption is visible — that output carries PII by design.
+ *
+ * The full JSON report is written to a gitignored scratch dir (`internal/` is
+ * gitignored; default `internal/roundtrip/`, override with `RL_RT_OUT=<dir>`).
+ * ⚠️ Both the input PDF and this JSON carry PII — NEVER commit either.
  */
+
+/** Ordered-entry value diff (experience/education): a count mismatch, else the
+ *  changed field VALUES `before → after` at each index. Unlike `entryListFails`
+ *  above (mapping-only, prints field names) this prints values, so it is
+ *  harness-only — never used by the PII-free corpus gate. */
+function entryValueFails<T>(
+  a1: readonly T[],
+  a3: readonly T[],
+  keys: readonly (keyof T)[],
+  label: string,
+): string[] {
+  if (a1.length !== a3.length)
+    return [`${label} count ${a1.length} → ${a3.length}`];
+  const out: string[] = [];
+  a1.forEach((r, i) => {
+    for (const k of keys)
+      if (!same(r[k], a3[i]?.[k]))
+        out.push(
+          `${label}[${i}].${String(k)}: ${JSON.stringify(r[k])} → ${JSON.stringify(a3[i]?.[k])}`,
+        );
+  });
+  return out;
+}
+
+/** Skills value diff: the count delta plus the added/removed tokens. */
+function skillsValueFails(s1: readonly string[], s3: readonly string[]): string[] {
+  const set1 = new Set(s1);
+  const set3 = new Set(s3);
+  const removed = s1.filter((s) => !set3.has(s));
+  const added = s3.filter((s) => !set1.has(s));
+  if (removed.length === 0 && added.length === 0) return [];
+  const out = [`count ${s1.length} → ${s3.length}`];
+  if (removed.length) out.push(`removed: ${JSON.stringify(removed)}`);
+  if (added.length) out.push(`added: ${JSON.stringify(added)}`);
+  return out;
+}
+
+/** Per-category before → after VALUE diff for one hop. */
+function harnessDiff(
+  before: CascadeResult,
+  after: CascadeResult,
+): Record<Exclude<Category, "render">, string[]> {
+  const c1 = before.parsed;
+  const c3 = after.parsed;
+  return {
+    contact: contactFails(c1, c3),
+    experience: entryValueFails(
+      c1.experience ?? [],
+      c3.experience ?? [],
+      ["title", "company", "start_date", "end_date"] as const,
+      "role",
+    ),
+    education: entryValueFails(
+      c1.education ?? [],
+      c3.education ?? [],
+      ["degree", "field", "institution"] as const,
+      "entry",
+    ),
+    skills: skillsValueFails(c1.skills ?? [], c3.skills ?? []),
+    summary: summaryFails(c1.summary ?? "", c3.summary ?? ""),
+  };
+}
+
 describe.runIf(process.env.RL_RT_PDF)("round-trip dev harness (RL_RT_PDF)", () => {
-  it("dumps the parse1-vs-parse3 diff for RL_RT_PDF", async () => {
+  it("dumps per-hop field-value diffs for RL_RT_PDF", async () => {
     const path = process.env.RL_RT_PDF!;
-    const p1 = await runCascade(new Uint8Array(readFileSync(path)));
-    const model = buildAtsResumeModel(p1, scoreFor(p1));
-    const p3 = await runCascade(await renderAtsResumePdf(model));
-    const fails = invariantFailures(p1, p3);
-    const summary = Object.fromEntries(
-      (Object.keys(fails) as Exclude<Category, "render">[])
-        .filter((c) => fails[c].length > 0)
-        .map((c) => [c, fails[c]]),
+    // Number of render→re-parse hops; clamp to ≥ 1.
+    const rounds = Math.max(1, Math.trunc(Number(process.env.RL_RT_ROUNDS ?? "1")) || 1);
+    const outDir =
+      process.env.RL_RT_OUT ?? join(HERE, "../../..", "internal/roundtrip");
+
+    // parses[0] = parse1 (source); parses[n] = re-parse after the nth render hop.
+    const parses: CascadeResult[] = [
+      await runCascade(new Uint8Array(readFileSync(path))),
+    ];
+    let renderError: string | undefined;
+    for (let hop = 1; hop <= rounds; hop++) {
+      const prev = parses[parses.length - 1];
+      const model = buildAtsResumeModel(prev, scoreFor(prev));
+      try {
+        parses.push(await runCascade(await renderAtsResumePdf(model)));
+      } catch (err) {
+        renderError = `renderAtsResumePdf threw on hop ${hop}: ${(err as Error).message}`;
+        break;
+      }
+    }
+
+    type HopReport = {
+      hop: number;
+      from: string;
+      to: string;
+      diff: Partial<Record<Exclude<Category, "render">, string[]>>;
+    };
+    const hops: HopReport[] = [];
+    for (let hop = 1; hop < parses.length; hop++) {
+      const fails = harnessDiff(parses[hop - 1], parses[hop]);
+      const diff = Object.fromEntries(
+        (Object.keys(fails) as Exclude<Category, "render">[])
+          .filter((c) => fails[c].length > 0)
+          .map((c) => [c, fails[c]]),
+      );
+      hops.push({ hop, from: `parse${hop}`, to: `parse${hop + 1}`, diff });
+    }
+
+    const report = { path, rounds, renderError, hops };
+
+    // Full JSON → gitignored scratch (carries PII by design).
+    mkdirSync(outDir, { recursive: true });
+    const outFile = join(
+      outDir,
+      `roundtrip-${basename(path).replace(/\.[^.]+$/, "")}-r${rounds}.json`,
+    );
+    writeFileSync(outFile, JSON.stringify(report, null, 2));
+
+    const console_lines = hops.map((h) =>
+      Object.keys(h.diff).length
+        ? `  hop ${h.hop} (${h.from} → ${h.to}):\n${JSON.stringify(h.diff, null, 2)
+            .split("\n")
+            .map((l) => `    ${l}`)
+            .join("\n")}`
+        : `  hop ${h.hop} (${h.from} → ${h.to}): clean — all invariants round-trip`,
     );
     console.log(
-      `RL_RT_PDF round-trip diff for ${path}:\n` +
-        (Object.keys(summary).length
-          ? JSON.stringify(summary, null, 2)
-          : "clean — all invariants round-trip"),
+      `RL_RT_PDF round-trip diff for ${path} (${rounds} hop${rounds > 1 ? "s" : ""}):\n` +
+        (renderError ? `  ⚠️ ${renderError}\n` : "") +
+        (console_lines.length ? console_lines.join("\n") : "  (no hops ran)") +
+        `\n\nFull JSON → ${outFile}  ⚠️ gitignored; carries PII, do NOT commit.`,
     );
     // Informational only: never fails, so a PII résumé with known bugs doesn't
     // redden the suite.
