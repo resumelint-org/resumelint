@@ -128,4 +128,21 @@ describe("mid-dot (·) single-line experience headers (#217)", () => {
     expect(roles[0].title.toLowerCase()).toContain("office manager");
     expect(roles[0].company).toContain("Nod Publishing");
   });
+
+  it("strips a trailing `·` left dangling on a two-line title header (#348)", () => {
+    // WeasyPrint-Cairo shape: the title line ends in a bare trailing "·" with the
+    // company on the NEXT line, so the " · " (whitespace-both-sides) split never
+    // fires and the glyph would otherwise stay glued to the title.
+    const roles = roleFromSection([
+      { text: "EXPERIENCE", fontSize: 13 },
+      { text: "Vice President ·", fontSize: 11 },
+      { text: "Computer Science Society, Springfield State University", fontSize: 11 },
+      { text: "01/2022 - 05/2024", fontSize: 11 },
+      { text: "• Led the executive board and doubled active membership.", fontSize: 11 },
+    ]);
+    expect(roles.length).toBeGreaterThanOrEqual(1);
+    expect(roles[0].title).toBe("Vice President");
+    expect(roles[0].title).not.toContain("·");
+    expect(roles[0].company).toContain("Computer Science Society");
+  });
 });
