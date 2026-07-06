@@ -103,6 +103,7 @@ describe("ResultDetailTabs", () => {
   it("hides the Resume Quality tab while capability is still detecting / no text", () => {
     const el = render({ isAvailable: false });
     expect(el.textContent).toContain("Reconstructed resume");
+    expect(el.textContent).toContain("Find jobs");
     expect(el.textContent).toContain("Source & diagnostics");
     expect(el.textContent).not.toContain("Resume Quality");
   });
@@ -115,11 +116,13 @@ describe("ResultDetailTabs", () => {
     const labels = Array.from(el.querySelectorAll('[role="tab"]')).map(
       (t) => t.textContent ?? "",
     );
-    // Exactly three tabs, Resume Quality in the middle (2nd), diagnostics last.
-    expect(labels).toHaveLength(3);
+    // Exactly four tabs: reconstructed, Find jobs (#318, always present),
+    // Resume Quality, diagnostics last.
+    expect(labels).toHaveLength(4);
     expect(labels[0]).toContain("Reconstructed resume");
-    expect(labels[1]).toContain("Resume Quality");
-    expect(labels[2]).toContain("Source & diagnostics");
+    expect(labels[1]).toContain("Find jobs");
+    expect(labels[2]).toContain("Resume Quality");
+    expect(labels[3]).toContain("Source & diagnostics");
   });
 
   it("keeps the Resume Quality tab (warn-marked) with the notice when WebGPU is unavailable", () => {

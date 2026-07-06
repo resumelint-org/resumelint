@@ -4,6 +4,7 @@
 import { useState } from "react";
 import { Card, Tabs, TabList, Tab, TabPanel } from "@design-system";
 import { ReconstructedResume } from "./ReconstructedResume.tsx";
+import { FindJobsPanel } from "./FindJobsPanel.tsx";
 import { ResumeQualityPanel } from "./ResumeQualityPanel.tsx";
 import { SourceDiagnosticsPanel } from "./SourceDiagnosticsPanel.tsx";
 import { WebGpuUnavailableNotice } from "./WebGpuUnavailableNotice.tsx";
@@ -70,6 +71,7 @@ export function ResultDetailTabs({
             without opening it. */}
         <TabList aria-label="Parsed result views">
           <Tab id="reconstructed">Reconstructed resume</Tab>
+          <Tab id="find-jobs">Find jobs</Tab>
           {showQualityTab && (
             <Tab id="quality" warn={!analysis.isAvailable}>
               Resume Quality
@@ -88,6 +90,9 @@ export function ResultDetailTabs({
               edit={edit}
               jdContext={jdContext}
             />
+          </TabPanel>
+          <TabPanel id="find-jobs">
+            <FindJobsPanel parsed={activeResult.parsed} />
           </TabPanel>
           {showQualityTab && (
             <TabPanel id="quality">
