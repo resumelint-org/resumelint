@@ -263,8 +263,13 @@ async function loadFonts(
     // untyped surface, rather than threading `any` through load-pdf-lib.ts.
     doc.registerFontkit(parts.fontkit as Parameters<Doc["registerFontkit"]>[0]);
     const bytes = await loadPoppinsBytes();
-    const regular = await doc.embedFont(bytes.regular);
-    const bold = await doc.embedFont(bytes.bold);
+    // `subset: true` prunes the embedded font to only the glyphs the résumé
+    // actually uses — a downloaded PDF touches ~60–80 glyphs, so this trims the
+    // full Poppins Regular + Bold (a few hundred KB) down to what's on the page.
+    // Orthogonal to the skip-`toWinAnsi()` path: subsetting prunes unused
+    // glyphs, it doesn't change the embedded-encoding logic.
+    const regular = await doc.embedFont(bytes.regular, { subset: true });
+    const bold = await doc.embedFont(bytes.bold, { subset: true });
     return { regular, bold, isEmbedded: true };
   } catch (err) {
     console.warn(

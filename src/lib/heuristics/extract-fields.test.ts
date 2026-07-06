@@ -1030,6 +1030,35 @@ describe("extractExperience", () => {
     expect(value[0].description).toContain("Assisted with patient intake");
   });
 
+  it("strips a LEADING anchor-noun phrase as a section boundary, not a role title (#336 review)", () => {
+    // The mirror of the #310 false-positive above: here the ≤4-word anchor-noun
+    // phrase ("Research Experience") LEADS its block at index 0, with the entry's
+    // company + dates stacked below it ("Northern Trust · Jan 2020 - Dec 2021").
+    // Because a leading anchor-noun phrase is a section header far more often than
+    // it is a real job title (job titles read "Research Assistant", not "Research
+    // Experience"), the leading-run strip correctly treats it as a boundary: the
+    // phrase is dropped and the company-less entry below becomes the role (its
+    // display name promoted to title via the leadsFreshEntry flip). This pins that
+    // precedence so a future guard-narrowing doesn't silently start retaining a
+    // leading anchor-noun phrase as a title (which would re-break #310).
+    const section = mkSection("experience", [
+      { text: "Research Experience" },
+      { text: "Northern Trust · Jan 2020 - Dec 2021" },
+      { text: "• Analyzed portfolio data" },
+    ]);
+    const { value } = extractExperience(section);
+    expect(value).toHaveLength(1);
+    // The leading phrase is stripped, never surfacing as company or body text.
+    expect(value[0].company).not.toBe("Research Experience");
+    expect(value[0].title).not.toBe("Research Experience");
+    expect(value[0].description ?? "").not.toContain("Research Experience");
+    // The entry below the boundary is the role: company-less, its name as title.
+    expect(value[0].title).toBe("Northern Trust");
+    expect(value[0].company).toBe("");
+    expect(value[0].start_date).toBe("Jan 2020");
+    expect(value[0].end_date).toBe("Dec 2021");
+  });
+
   it("parses a single-header experience section with one role (no boundary regression)", () => {
     const section = mkSection("experience", [
       { text: "Data Analyst" },
