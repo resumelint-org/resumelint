@@ -1104,7 +1104,17 @@ function buildEntryBlock(
   // structural signal (#298). Each group is trimmed and de-blanked
   // independently so the anchor index stays accurate after empties drop.
   const aboveTexts = aboveLines.map((l) => l.text.trim()).filter(Boolean);
-  const anchorText = anchorTextWithoutDates.trim();
+  // A "Date · Location" sub-line (two-column Google-Docs export, #347) leaves a
+  // dangling LEADING separator once the date range is stripped off the front:
+  // "Jan 2022 – Present · Springfield, IL" → "· Springfield, IL". Peel that
+  // orphaned leading "·"/"|"/dash so the residual location routes cleanly in
+  // disambiguateCompanyTitle — otherwise the leading "·" survives the
+  // whitespace-both-sides split, clobbers the company/team assignment, and (for
+  // a multi-word city) mis-splits the location. Only the LEADING run is peeled:
+  // a TRAILING "·" is the reconstructed-export org-signature marker
+  // (anchorCarriesOrgSignal) and an INTERNAL " · " is a real segment separator,
+  // both of which must survive.
+  const anchorText = anchorTextWithoutDates.replace(/^[\s·•‣|—–-]+/, "").trim();
   const belowTexts = belowHeaderLines.map((l) => l.text.trim()).filter(Boolean);
   const headerLines = [
     ...aboveTexts,
