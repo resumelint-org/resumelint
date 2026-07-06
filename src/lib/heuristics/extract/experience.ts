@@ -624,6 +624,15 @@ function disambiguateCompanyTitle(
   //     never ends in a bare middot, so this only ever removes the marker.
   if (company) company = company.replace(/\s*·\s*$/, "").trim() || undefined;
 
+  // (4b) Strip a field-separator glyph left dangling on the TITLE after header
+  //      splitting. The `·`/`|`/`—`-split above only fires on a separator with
+  //      whitespace on BOTH sides, so a two-line "Title ·" / "Company … Dates"
+  //      header (WeasyPrint-Cairo, #348) — where the title line ends in a bare
+  //      trailing "·" (no company on the same row to split against) — keeps the
+  //      glyph glued to the title. A real title never ends in a bare separator,
+  //      so `stripDanglingSeparator` only ever removes the residue.
+  if (title) title = stripDanglingSeparator(title) || undefined;
+
   // (5) A title that is ENTIRELY a bare location string is a title-less role, not
   //     a real title. Our own empty-title-role export (ats-resume-model.ts) emits
   //     "Company · City, ST" on a SINGLE header line for a role with no title (the
