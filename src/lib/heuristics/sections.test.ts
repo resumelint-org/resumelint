@@ -34,7 +34,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_ROOT = join(HERE, "../../..", "tests/fixtures/pdfs");
 
 function build(
-  specs: Array<{ text: string; fontSize?: number; x?: number; lineIndex?: number }>,
+  specs: Array<{ text: string; fontSize?: number; x?: number; lineIndex?: number; page?: number }>,
   columnBoundaries?: Map<number, number>,
 ): PdfSection[] {
   const items = mkItems(specs);
@@ -414,11 +414,49 @@ describe("splitIntoSections — single-column label-rail recovery FP gate (#355)
     expect(edu!.name).toBe("education");
   });
 
-  it("DOES open skills for the intended STACKED rail label atop a value grid (`Technical` / `Skills`)", () => {
+  it("does NOT open experience for a TIGHTLY-SPACED compound title `Experience Designer` (Rohith residual)", () => {
+    // "Experience" renders as its own item (bold first word), but "Designer" is
+    // tightly spaced right after it — one compound job title, not a rail label
+    // over a body entry. The standalone-alias gap guard rejects it despite the
+    // strong date tail (which alone would satisfy `remainderLooksLikeEntry`).
     const sections = build([
       ...PROFILE,
-      // Lead cells "Technical" over "Skills" join to the `technical skills` alias;
-      // each row carries ≥2 short grid value cells.
+      { text: "Experience", x: RAIL_X, fontSize: 10, lineIndex: 2 },
+      { text: "Designer, Acme Corp", x: RAIL_X + 53, fontSize: 10, lineIndex: 2 }, // gap ~3pt
+      { text: "Jan 2020 - Present", x: RAIL_X + 150, fontSize: 10, lineIndex: 2 },
+    ]);
+    expect(names(sections)).not.toContain("experience");
+  });
+
+  it("DOES still open experience for a genuine inline rail header with a LARGE alias→body gap", () => {
+    // Alias in the rail, role in the body — a real rail→body jump (~40pt) clears
+    // the standalone-alias gap guard, so the inline recognizer still opens it.
+    const sections = build([
+      ...PROFILE,
+      { text: "Experience", x: RAIL_X, fontSize: 10, lineIndex: 2 },
+      { text: "Staff Engineer, Platform", x: RAIL_X + 90, fontSize: 10, lineIndex: 2 }, // gap ~40pt
+      { text: "Aug 2024 - Present", x: RAIL_X + 250, fontSize: 10, lineIndex: 2 },
+    ]);
+    expect(sectionContaining(sections, "Staff Engineer")?.name).toBe("experience");
+  });
+
+  it("does NOT open experience for `Experience` ‖ a lowercase-connective prose lead (no rail separation)", () => {
+    // A same-row inline shape with NO narrow rail (label + prose share the
+    // margin): `splitByLabelRail` declines (nothing sits well right of the rail),
+    // and the fallthrough `matchLeadingTokenHeader` rejects the prose remainder.
+    const sections = build([
+      ...PROFILE,
+      ...railRow(2, ["Experience", "spanning 2015 - 2023 across fintech"]),
+    ]);
+    expect(names(sections)).not.toContain("experience");
+  });
+
+  it("DOES open skills for a SAME-ROW stacked rail label atop a value grid (`Technical` / `Skills`)", () => {
+    // Complement of the separated rail: the grid values share the label's own
+    // row (one PdfLine per row), so there is no rail to partition —
+    // `tryStackedRailLabel` (the same-row recognizer) owns this shape.
+    const sections = build([
+      ...PROFILE,
       ...railRow(2, ["Technical", "Java", "Python", "SQL", "Kafka"]),
       ...railRow(3, ["Skills", "Spring", "Spark", "React", "AWS"]),
     ]);
@@ -426,14 +464,150 @@ describe("splitIntoSections — single-column label-rail recovery FP gate (#355)
   });
 
   it("does NOT open skills for two PROSE lines whose leads coincidentally join to `Technical Skills` (finding #2)", () => {
+    // Leads join to the alias, but each remainder is a single prose clause, not a
+    // grid of value cells — the same-row grid-value guard must reject it.
     const sections = build([
       ...PROFILE,
-      // Leads join to the alias, but each remainder is a single prose clause, not
-      // a grid of value cells — the grid-value guard must reject it.
       ...railRow(2, ["Technical", "debt reduction was a major initiative"]),
       ...railRow(3, ["Skills", "matrix mapped every role to a competency"]),
     ]);
     expect(names(sections)).not.toContain("skills");
+  });
+});
+
+describe("splitIntoSections — separated label-rail partitioning (#355)", () => {
+  // The real #355 failure: the section keywords sit in a NARROW LEFT RAIL while
+  // all body content — role headers, bullets, the skills grid — sits well to the
+  // right. `detectColumnBoundaries` correctly finds no gutter (rail too narrow),
+  // so this is single column, but the per-line splitter can't see the rail
+  // structure. `splitByLabelRail` partitions by the rail geometry: a keyword
+  // ALONE ("Experience"), two stacked rail rows joined ("Technical"+"Skills"),
+  // or an inline leading-token row all open their section, and the body between
+  // rail labels routes in by y-band — immune to the skills grid fragmenting into
+  // one PdfLine per cell (the case the same-row `tryStackedRailLabel` can't
+  // handle, since the two label rows are no longer consecutive clean grid rows).
+  const RAIL = 26; // narrow rail margin
+  const BODY = 130; // body margin (well right of the rail)
+  const DATE_X = 420; // far-right date column
+
+  /** A full separated-rail résumé: stacked Technical/Skills over a grid, an
+   *  Experience rail label + role on the same visual row + bullets, and an
+   *  Education rail label + degree entry. */
+  const SEPARATED = [
+    { text: "Jane Smith", x: RAIL, fontSize: 16, lineIndex: 0 },
+    { text: "jane.smith@example.com | (312) 555-0123", x: RAIL, lineIndex: 1 },
+    // Stacked skills rail label over a fragmented value grid (cells to the right
+    // on the SAME two rows as the labels).
+    { text: "Technical", x: RAIL, lineIndex: 3 },
+    { text: "Java", x: BODY, lineIndex: 3 },
+    { text: "Python", x: BODY + 110, lineIndex: 3 },
+    { text: "SQL", x: BODY + 240, lineIndex: 3 },
+    { text: "Skills", x: RAIL, lineIndex: 4 },
+    { text: "Spring Boot", x: BODY, lineIndex: 4 },
+    { text: "Spark", x: BODY + 110, lineIndex: 4 },
+    { text: "React", x: BODY + 240, lineIndex: 4 },
+    // Experience rail label + role header + date on one visual row, then bullets.
+    { text: "Experience", x: RAIL, lineIndex: 6 },
+    { text: "Staff Engineer, Platform", x: BODY, lineIndex: 6 },
+    { text: "Aug 2024 - Present", x: DATE_X, lineIndex: 6 },
+    { text: "• Led platform migration scaling to 10M requests per day", x: BODY + 14, lineIndex: 7 },
+    { text: "• Reduced p99 latency 40 percent via a caching layer", x: BODY + 14, lineIndex: 8 },
+    // Education rail label + degree entry on one visual row.
+    { text: "Education", x: RAIL, lineIndex: 10 },
+    { text: "B.S. Computer Science, State University", x: BODY, lineIndex: 10 },
+    { text: "2013 - 2017", x: DATE_X, lineIndex: 10 },
+  ];
+
+  it("routes the stacked Technical/Skills grid into `skills`, and the Experience/Education rail labels into their sections", () => {
+    const sections = build(SEPARATED);
+    expect(names(sections)).toContain("skills");
+    expect(names(sections)).toContain("experience");
+    expect(names(sections)).toContain("education");
+    // Grid tokens land in skills, NOT in experience.
+    expect(sectionContaining(sections, "Java")?.name).toBe("skills");
+    expect(sectionContaining(sections, "Spark")?.name).toBe("skills");
+    // The role header + its bullets land in experience.
+    expect(sectionContaining(sections, "Staff Engineer")?.name).toBe("experience");
+    expect(sectionContaining(sections, "Led platform migration")?.name).toBe(
+      "experience",
+    );
+    // The degree lands in education.
+    expect(sectionContaining(sections, "B.S. Computer Science")?.name).toBe(
+      "education",
+    );
+  });
+
+  it("multi-page rail: page-2 Education owns its own content; page-1 skills stays clean; order preserved", () => {
+    // Page-2 lines RESTART y from the top, so a page-2 label/degree/bullet sit at
+    // the SAME y as the page-1 skills grid. Bare-y banding would weld the page-2
+    // degree into the page-1 skills section and empty education; `(page, y)`
+    // banding keeps each page's content with its own page's labels.
+    const sections = build([
+      // ── Page 1 ──
+      { text: "Jane Smith", x: RAIL, fontSize: 16, lineIndex: 0, page: 1 },
+      { text: "jane.smith@example.com | (312) 555-0123", x: RAIL, lineIndex: 1, page: 1 },
+      { text: "Technical", x: RAIL, lineIndex: 3, page: 1 },
+      { text: "Java", x: BODY, lineIndex: 3, page: 1 },
+      { text: "Python", x: BODY + 110, lineIndex: 3, page: 1 },
+      { text: "Skills", x: RAIL, lineIndex: 4, page: 1 },
+      { text: "Spring Boot", x: BODY, lineIndex: 4, page: 1 },
+      { text: "React", x: BODY + 110, lineIndex: 4, page: 1 },
+      { text: "Experience", x: RAIL, lineIndex: 6, page: 1 },
+      { text: "Staff Engineer, Platform", x: BODY, lineIndex: 6, page: 1 },
+      { text: "Aug 2024 - Present", x: DATE_X, lineIndex: 6, page: 1 },
+      { text: "• Led platform migration scaling to 10M requests per day", x: BODY + 14, lineIndex: 7, page: 1 },
+      // ── Page 2 (lineIndex 3 → y OVERLAPS the page-1 Technical/skills-grid rows) ──
+      { text: "Education", x: RAIL, lineIndex: 3, page: 2 },
+      { text: "B.S. Computer Science, State University", x: BODY, lineIndex: 3, page: 2 },
+      { text: "2013 - 2017", x: DATE_X, lineIndex: 3, page: 2 },
+      { text: "• Dean's list all eight semesters", x: BODY + 14, lineIndex: 4, page: 2 },
+    ]);
+    // Page-2 Education owns its degree + bullet.
+    expect(sectionContaining(sections, "B.S. Computer Science")?.name).toBe("education");
+    expect(sectionContaining(sections, "Dean's list")?.name).toBe("education");
+    // Page-1 skills stays clean — no page-2 content welded in by bare-y banding.
+    const skills = sections.find((s) => s.name === "skills");
+    expect(skills?.lines.some((l) => l.text.includes("B.S. Computer Science"))).toBe(false);
+    // Section order preserved: education comes after skills + experience.
+    expect(names(sections)).toEqual(["profile", "skills", "experience", "education"]);
+  });
+
+  it("tight spacing: a label ONE line-height below the prior section's last bullet does NOT steal it", () => {
+    // Education's label sits ~one line-height (14pt) below Experience's last
+    // bullet — the common rail spacing. An over-wide overlap tolerance would pull
+    // that bullet up into education (an experience-bullet undercount); the
+    // sub-line `RAIL_BAND_OVERLAP_TOL` must leave it in experience. Body is set
+    // far right (x=210) so each rail label fragments off as its OWN line
+    // (Experience opens alone; its role+date sit on the label's row).
+    const B = 210;
+    const sections = build([
+      { text: "Jane Smith", x: RAIL, fontSize: 16, lineIndex: 0 },
+      { text: "jane.smith@example.com | (312) 555-0123", x: RAIL, lineIndex: 1 },
+      { text: "Experience", x: RAIL, lineIndex: 3 },
+      { text: "Staff Engineer, Platform  Aug 2024 - Present", x: B, lineIndex: 3 },
+      { text: "• Led platform migration scaling to 10M requests per day", x: B + 14, lineIndex: 4 },
+      { text: "• Reduced p99 latency 40 percent via a caching layer", x: B + 14, lineIndex: 5 }, // LAST exp bullet
+      // Education label exactly one line-height (lineIndex+1) below the last bullet.
+      { text: "Education", x: RAIL, lineIndex: 6 },
+      { text: "B.S. Computer Science, State University", x: B, lineIndex: 6 },
+      { text: "2013 - 2017", x: B + 200, lineIndex: 6 },
+    ]);
+    expect(sectionContaining(sections, "Reduced p99 latency")?.name).toBe("experience");
+    expect(sectionContaining(sections, "B.S. Computer Science")?.name).toBe("education");
+  });
+
+  it("does NOT mint a spurious section from an ordinary two-line profile pair in the rail", () => {
+    // A name over a tagline in the rail, with body to the right — neither rail
+    // line is an alias, so < 2 labels are found and the partitioner declines;
+    // nothing but `profile` is produced.
+    const sections = build([
+      { text: "Jane Smith", x: RAIL, fontSize: 16, lineIndex: 0 },
+      { text: "Senior Staff Engineer", x: RAIL, fontSize: 12, lineIndex: 1 },
+      { text: "Building distributed systems since 2015", x: BODY, lineIndex: 0 },
+    ]);
+    expect(names(sections)).not.toContain("experience");
+    expect(names(sections)).not.toContain("skills");
+    expect(names(sections)).not.toContain("education");
   });
 });
 

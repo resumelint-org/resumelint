@@ -910,14 +910,32 @@ export function splitIntoSections(
   lines: PdfLine[],
   columnBoundaries?: Map<number, number>,
 ): PdfSection[] {
-  const sections: PdfSection[] = [{ name: "profile", lines: [] }];
-  const bodyBaseline = computeBodyBaseline(lines);
-  const bodyLineHeight = computeBodyLineHeight(lines);
   // Single-column docs enable the #310/#311 second-experience-header boundary
   // (see the adjacency note in `classifyLine`). Two-column layouts keep the
   // stricter #258 suppression: a sidebar flatten interleaves recovered anchors
   // mid-column, where a relaxed boundary would mint spurious sections.
   const singleColumn = !columnBoundaries || columnBoundaries.size === 0;
+
+  // Single-column LABEL-RAIL layout (#355): the section keywords live in a
+  // narrow left rail (x ≈ rail margin) while ALL body content — role headers,
+  // bullets, the skills grid — sits well to the right. `detectColumnBoundaries`
+  // correctly finds no gutter (the rail is too narrow / low-coverage), so this
+  // is genuinely single column, but the per-line splitter below can't see the
+  // rail structure: the rail labels never share a row with the content they
+  // head, the skills grid fragments into one PdfLine per cell (irregular
+  // per-cell baselines), and the tokens scatter into whatever section is open.
+  // `splitByLabelRail` partitions by the rail geometry instead, routing the
+  // body between rail labels; it returns null (fall through to the per-line
+  // splitter) whenever the tight rail signature isn't present, so no non-rail
+  // corpus layout is affected.
+  if (singleColumn) {
+    const railSections = splitByLabelRail(lines);
+    if (railSections) return railSections;
+  }
+
+  const sections: PdfSection[] = [{ name: "profile", lines: [] }];
+  const bodyBaseline = computeBodyBaseline(lines);
+  const bodyLineHeight = computeBodyLineHeight(lines);
   // True until the first non-profile section (keyword or visual) opens.
   let openedRealSection = false;
   // True once the leading name/title block has ended — signalled by the first
@@ -935,13 +953,15 @@ export function splitIntoSections(
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Single-column STACKED grid rail label (#355 gap 2): a section keyword
-    // split vertically across two consecutive rail rows ("Technical" over
-    // "Skills"). Checked before `classifyLine`, gated to single column and to
-    // past the leading name/contact block, and only when this row is not itself
-    // an already-recognized header — so an ordinary two-line profile pair can't
-    // mint a false section. Opens the section and routes both rows' grid
-    // remainders into it, consuming the second row.
+    // Single-column SAME-ROW stacked grid rail label (#355 gap 2): a section
+    // keyword split vertically across two consecutive rail rows ("Technical"
+    // over "Skills") whose grid VALUES share the label's row (no separated rail,
+    // so `splitByLabelRail` above declines). Checked before `classifyLine`,
+    // gated to single column and to past the leading name/contact block, and
+    // only when this row is not itself an already-recognized header — so an
+    // ordinary two-line profile pair can't mint a false section. Opens the
+    // section and routes both rows' grid remainders into it, consuming the
+    // second row.
     if (
       singleColumn &&
       (openedRealSection || seenContactInProfile) &&
@@ -1199,14 +1219,42 @@ function buildLineFromItems(items: PdfTextItem[], parent: PdfLine): PdfLine {
 }
 
 /**
+ * Minimum horizontal gap (pt) between an inline alias's right edge and the
+ * remainder's left edge for the alias to read as a STANDALONE rail label rather
+ * than the first word of a compound title. In a genuine label-rail inline header
+ * the alias sits in the rail and the entry in the body, so the remainder's left
+ * edge is a LARGE rail→body jump (≥~20pt in tests, ~26pt+ observed on real rail
+ * résumés); a compound job title ("Experience Designer") has ordinary inter-word
+ * spacing (~2–5pt). 12pt sits well above that word-space band yet below every
+ * observed rail→body gap, so it splits the two without weakening rail recovery.
+ */
+const STANDALONE_ALIAS_MIN_GAP = 12;
+
+/**
  * Recover an INLINE leading-token header (#355 gap 1). Matches the section alias
  * against a whole-ITEM prefix of the line — NOT a sub-word split of the merged
- * text. Requiring the alias to align to item boundaries is the load-bearing FP
- * guard: a rail label is drawn as its own positioned text run (its own item),
- * whereas a job title whose first word happens to be a keyword ("Experience
- * Designer") is one continuous run, so its item[0] is the whole title and never
- * equals a bare alias. The remainder items (past the alias) become the section's
- * retained first content line. Returns null when no guarded match is found.
+ * text. Requiring the alias to align to item boundaries is the first FP guard: a
+ * rail label is drawn as its own positioned text run (its own item), whereas a
+ * job title rendered as one continuous run has item[0] = the whole title, which
+ * never equals a bare alias.
+ *
+ * That guard has a residual (Rohith, #355): a compound title whose FIRST WORD is
+ * itself a bare alias AND renders as its own item (bold first word / heavy
+ * tracking / a ligature split) — "Experience Designer", "Education Specialist" —
+ * satisfies the item-boundary check. The {@link STANDALONE_ALIAS_MIN_GAP} guard
+ * below closes the common case: it rejects a TIGHTLY-SPACED title-case
+ * continuation (the next word of the same phrase), admitting only a standalone
+ * alias with a real rail→body gap before the entry.
+ *
+ * A narrower residual is left DELIBERATELY: a same-x split (a compound title
+ * whose first word is drawn with an unusually WIDE ≥12pt tracking gap, or stacked
+ * at the same x) could still slip. Blast radius is bounded — `education` is
+ * additionally protected by its degree/institution `remainderLooksLikeEntry`
+ * tell, and a spurious `experience` re-open merges back into the real section via
+ * `byName` (`toSectionedResume`), so no content is stranded.
+ *
+ * The remainder items (past the alias) become the section's retained first
+ * content line. Returns null when no guarded match is found.
  */
 function matchLeadingTokenHeader(
   line: PdfLine,
@@ -1230,6 +1278,15 @@ function matchLeadingTokenHeader(
       if (!SECTION_KEYWORDS[section].includes(normalized)) continue;
       const remItems = items.slice(k);
       if (!remainderLooksLikeEntry(section, mergeItemText(remItems))) continue;
+      // Standalone-alias gap guard: a tightly-spaced title-case continuation
+      // ("Experience" ‖ "Designer") is the same compound title, not a rail label
+      // over a body entry — reject it. Only a large rail→body gap (or a
+      // non-title-case remainder, already excluded above) qualifies as standalone.
+      const aliasEnd = items[k - 1];
+      const gap = remItems[0].x - (aliasEnd.x + aliasEnd.width);
+      if (gap < STANDALONE_ALIAS_MIN_GAP && /^[A-Z]/.test(remItems[0].str.trim())) {
+        continue;
+      }
       return {
         section,
         alias: aliasTrim,
@@ -1240,8 +1297,18 @@ function matchLeadingTokenHeader(
   return null;
 }
 
-/** x tolerance (pt) for treating two rail-label cells as sitting in the same
- *  rail column (the stacked-label test). */
+// ── Label-rail partitioning (#355) ──────────────────────────────────────────
+//
+// This SUPERSEDES the brittle `tryStackedRailLabel` grid-adjacency recognizer.
+// That helper required the two stacked label rows ("Technical" over "Skills")
+// to be CONSECUTIVE PdfLines and each to be a clean horizontal grid row — both
+// assumptions break on a real rail résumé where the skills grid has irregular
+// per-cell baselines, so pdfjs emits ~one PdfLine per cell and a stray single
+// cell sits between the two label rows. Rather than pattern-match adjacent
+// lines, we detect the rail from geometry and partition the body by y-band,
+// which is immune to grid fragmentation and pdfjs emission order.
+
+/** x tolerance (pt) for treating two lines' left edges as the same rail column. */
 const RAIL_X_TOL = 4;
 
 /** Max length (chars) of one horizontal grid value cell — a skill token
@@ -1251,10 +1318,10 @@ const GRID_CELL_MAX = 24;
 /**
  * True when a row PAST its lead cell reads like a horizontal grid of value
  * tokens — ≥2 cells, each short and not a sentence — rather than prose (#355
- * gap-2 finding #2 FP guard). A real stacked rail label ("Technical" over
- * "Skills") sits atop a skills grid whose value cells are single short tokens;
- * two consecutive prose lines whose leads coincidentally join to an alias
- * ("Technical debt …" over "Skills matrix …") do not form such a grid.
+ * gap-2 finding #2 FP guard). A real SAME-ROW stacked rail label ("Technical"
+ * over "Skills") sits atop a skills grid whose value cells are single short
+ * tokens; two consecutive prose lines whose leads coincidentally join to an
+ * alias ("Technical debt …" over "Skills matrix …") do not form such a grid.
  */
 function isGridValueRow(row: PdfLine): boolean {
   // pdfjs emits whitespace-only items between separately-drawn cells; drop them
@@ -1268,13 +1335,16 @@ function isGridValueRow(row: PdfLine): boolean {
 }
 
 /**
- * Recover a STACKED grid rail label (#355 gap 2): two consecutive single-column
- * lines whose LEADING items, joined, form a section alias ("Technical" +
- * "Skills" → `technical skills` → skills). The grid values (each row's remainder
- * past its lead cell) become the section's content. Scoped tightly — both lead
- * cells sit in the same rail column (same left x), and the joined lead tokens
- * must EXACTLY equal a canonical alias — so ordinary two-line body content can't
- * mint a false section. Returns null when the pair is not a stacked rail label.
+ * Recover a SAME-ROW STACKED grid rail label (#355 gap 2): two consecutive
+ * single-column lines whose LEADING items, joined, form a section alias
+ * ("Technical" + "Skills" → `technical skills` → skills) AND whose grid VALUES
+ * share the label's own row (so there is no separated rail for
+ * {@link splitByLabelRail} to partition — this is its complement, not a
+ * duplicate). The grid values (each row's remainder past its lead cell) become
+ * the section's content. Scoped tightly — both lead cells sit in the same rail
+ * column (same left x), and the joined lead tokens must EXACTLY equal a
+ * canonical alias — so ordinary two-line body content can't mint a false
+ * section. Returns null when the pair is not a stacked rail label.
  */
 function tryStackedRailLabel(
   a: PdfLine,
@@ -1288,20 +1358,9 @@ function tryStackedRailLabel(
   if (Math.abs(leadA.x - leadB.x) > RAIL_X_TOL) return null;
   // Join the two lead cells with an explicit space — they are STACKED (same x,
   // different y), so `mergeItemText` (which infers spacing from a same-line
-  // left-to-right gap) would compute a negative gap and weld them ("Technical"
-  // + "Skills" → "TechnicalSkills"). Collapse each cell's own letter-spacing
-  // first (a single-item `mergeItemText` does exactly that).
+  // left-to-right gap) would compute a negative gap and weld them.
   const joined = `${mergeItemText([leadA])} ${mergeItemText([leadB])}`.trim();
-  const normalized = joined.toLowerCase().replace(/[:·•]+$/, "").trim();
-  let matched: SectionName | null = null;
-  for (const [name, aliases] of Object.entries(SECTION_KEYWORDS) as Array<
-    [SectionName, readonly string[]]
-  >) {
-    if (aliases.includes(normalized)) {
-      matched = name;
-      break;
-    }
-  }
+  const matched = matchExactAlias(joined);
   if (!matched) return null;
   // Finding #2 FP guard: require each row to be a real grid (≥2 short value
   // cells past its lead), so two prose lines whose leads happen to join to an
@@ -1312,6 +1371,363 @@ function tryStackedRailLabel(
     if (row.items.length > 1) remainders.push(buildLineFromItems(row.items.slice(1), row));
   }
   return { section: matched, rawHeading: joined.trim(), remainders };
+}
+
+/**
+ * Minimum horizontal gap (pt) between the rail's left edge and the body's left
+ * edge for a layout to count as a label rail. A normal left-aligned résumé
+ * indents bullets only ~15–25pt past the header/role margin, so 40pt sits well
+ * above that while comfortably below the #355 rail gap (~73pt). This is the
+ * primary guard against the partitioner hijacking an ordinary single-column
+ * résumé whose name/headers share the left margin with role titles.
+ */
+const RAIL_BODY_MIN_GAP = 40;
+
+/** A body line counts as sharing a rail label's ROW when their baselines agree
+ *  within this tolerance (pt) — the "label + first entry on one visual row"
+ *  signature that distinguishes a true rail from an ordinary header (which sits
+ *  alone on its row with content strictly below it). A hair looser than
+ *  `LINE_Y_EPS` to absorb the ~1–2pt per-cell baseline jitter of a grid row. */
+const RAIL_SAMEROW_EPS = 4.5;
+
+/**
+ * Vertical tolerance (pt) by which a body line may sit ABOVE its rail label's
+ * top row and still belong to that section. Rail labels are top-aligned (or,
+ * when stacked, their rows interleave with the block), so the block's first body
+ * row can render a POINT OR TWO above the label baseline (grid top-alignment
+ * jitter) — that is all this absorbs. It MUST stay well under one line-height:
+ * a rail layout commonly places the next section's label ~one line-height
+ * (~11–14pt) below the previous section's last bullet, so a tolerance near a
+ * full line would reach back up and STEAL that bullet into the next section (an
+ * experience-bullet undercount — the exact failure this parser exists to fix).
+ * So this is sub-line jitter only, in line with `RAIL_SAMEROW_EPS`.
+ */
+const RAIL_BAND_OVERLAP_TOL = 5;
+
+/** Exact (non-anchor) alias match: the normalized text must equal one of a
+ *  section's canonical aliases. Trailing `:`/`·`/`•` are stripped (a rail cell
+ *  carries none, but a flatten can append one). Returns the section or null.
+ *
+ *  Intentional asymmetry vs. `matchLeadingTokenHeader` (which REJECTS a trailing
+ *  colon so `"Experience:"` can't open on the inline path): here the alone-path
+ *  alias is the WHOLE line text, so a bare `"Experience:"` rail cell is a real
+ *  standalone section label and SHOULD open — there is no value welded onto it
+ *  to worry about, unlike the inline "label: value" prose shape the colon guards. */
+function matchExactAlias(text: string): SectionName | null {
+  const normalized = text.trim().toLowerCase().replace(/[:·•]+$/, "").trim();
+  if (!normalized) return null;
+  for (const [name, aliases] of Object.entries(SECTION_KEYWORDS) as Array<
+    [SectionName, readonly string[]]
+  >) {
+    if (aliases.includes(normalized)) return name;
+  }
+  return null;
+}
+
+/** Rail sections whose downstream parser is date-anchored entry-block based
+ *  (`extractExperience`/`extractEducation`/…), so reassembling each fragmented
+ *  "header … date" visual row into one PdfLine helps. Deliberately EXCLUDES
+ *  `skills`/`summary`/`other`, whose token/prose lists a row-merge would weld. */
+const ROW_MERGE_SECTIONS: readonly SectionName[] = [
+  "experience",
+  "education",
+  "projects",
+  "achievements",
+];
+
+/** A section label recovered from the rail. Its band start is the compound key
+ *  (`page`, `boundaryY` = the min y of its label row(s)) — page is the PRIMARY
+ *  key so a label only ever owns body lines on its OWN page (multi-page résumés
+ *  restart y per page, so a bare-y band would scramble page-2 content into
+ *  page-1 sections). `parentRows` are the rail lines consumed as the label itself
+ *  (excluded from content); `remainders` are content lines carried on the
+ *  label's OWN row(s) — the first entry after an inline leading-token keyword, or
+ *  the grid VALUE cells that pdfjs merged onto a same-row stacked label
+ *  ("Technical Java Python …"). They are re-injected at the label's position so
+ *  they are never lost with the excluded label rows. */
+interface RailLabel {
+  section: SectionName;
+  display: string;
+  page: number;
+  boundaryY: number;
+  parentRows: PdfLine[];
+  remainders: PdfLine[];
+}
+
+/** The content remainder carried on a rail label's own row — its items past the
+ *  leading label cell — as a PdfLine, or null when the row is the label alone
+ *  (the fragmented-grid case, where the values sit on their own separate lines). */
+function railRowRemainder(row: PdfLine): PdfLine | null {
+  return row.items.length > 1
+    ? buildLineFromItems(row.items.slice(1), row)
+    : null;
+}
+
+/**
+ * Partition a single-column LABEL-RAIL résumé (#355) into sections by rail
+ * geometry, or return null when the tight rail signature is absent (the caller
+ * then falls through to the per-line splitter, so non-rail layouts are
+ * untouched).
+ *
+ * Model: the section keywords sit in a narrow left rail; every body line lives
+ * well to the right of it. We (1) find the rail (min left edge, a set of lines
+ * within `RAIL_X_TOL` of it), (2) walk the rail top-to-bottom recovering each
+ * label — a keyword ALONE ("Experience"), two stacked rail rows joined
+ * ("Technical"+"Skills" → "technical skills"), or an inline leading-token row
+ * ("Education  State University …" via `matchLeadingTokenHeader`) — and (3)
+ * assign every non-label line to the label whose band it falls in — keyed on
+ * `(page, y)` so a label owns only same-page body below it (or a later page with
+ * no earlier label of its own); a page-2 line before any page-2 label continues
+ * the last page-1 section, never scrambles into a page-1 band by y-value alone.
+ * Assignment is by absolute `(page, y)`, so grid fragmentation and column-reorder
+ * emission order don't matter; body lines keep their document (array) order.
+ *
+ * Guards against firing on an ordinary résumé: a large rail→body gap
+ * (`RAIL_BODY_MIN_GAP`), ≥2 recovered labels, ≥1 label carrying body on its own
+ * row (`RAIL_SAMEROW_EPS` — a header sitting alone on its row fails this), and
+ * ≥2 sections that actually receive content.
+ */
+function splitByLabelRail(lines: PdfLine[]): PdfSection[] | null {
+  if (lines.length < 4) return null;
+
+  // Global min left edge defines the rail. A stray far-left glyph or page-number
+  // could pull `railX` too far left, but that can't mint a spurious partition:
+  // the `labels.length >= 2` EXACT-alias gate (plus the same-row-body signature
+  // and ≥2-contentful check) is what admits a layout, and a stray glyph is not a
+  // section alias — at worst it widens the rail band harmlessly.
+  const railX = Math.min(...lines.map((l) => l.x));
+  const railLines: PdfLine[] = [];
+  const nonRail: PdfLine[] = [];
+  for (const l of lines) {
+    if (l.x - railX <= RAIL_X_TOL) railLines.push(l);
+    else nonRail.push(l);
+  }
+  if (nonRail.length === 0) return null;
+  const bodyMinX = Math.min(...nonRail.map((l) => l.x));
+  if (bodyMinX - railX < RAIL_BODY_MIN_GAP) return null;
+
+  const bodyLineHeight = computeBodyLineHeight(lines);
+  const stackedMaxDy = Math.max(bodyLineHeight * 2, 20);
+
+  // Recover rail labels in reading order (page, then y). A rail line is consumed
+  // as a label when its own text is an exact alias, when it joins its next rail
+  // neighbour into an alias (stacked), or when its leading token(s) form an
+  // inline header (`matchLeadingTokenHeader`).
+  const railByY = [...railLines].sort((a, b) => a.page - b.page || a.y - b.y);
+  const labels: RailLabel[] = [];
+  for (let i = 0; i < railByY.length; i++) {
+    const a = railByY[i];
+    const b = i + 1 < railByY.length ? railByY[i + 1] : null;
+
+    // Stacked join: two rail rows on the SAME PAGE, in the same column,
+    // vertically adjacent, whose lead cells joined equal an alias ("Technical"
+    // over "Skills"). The same-page guard stops a page-2 label that sorts right
+    // after a page-1 label from being welded into a bogus cross-page join.
+    if (
+      b &&
+      b.page === a.page &&
+      Math.abs(b.x - a.x) <= RAIL_X_TOL &&
+      b.y - a.y <= stackedMaxDy
+    ) {
+      const joined = `${mergeItemText([a.items[0]])} ${mergeItemText([b.items[0]])}`.trim();
+      const stackedSection = matchExactAlias(joined);
+      if (stackedSection) {
+        // Grid values that pdfjs merged onto either label row (the same-row
+        // shape) are recovered as content; the fragmented shape carries none
+        // here (the values sit on their own lines, routed by y-band below).
+        const remainders = [railRowRemainder(a), railRowRemainder(b)].filter(
+          (r): r is PdfLine => r !== null,
+        );
+        labels.push({
+          section: stackedSection,
+          display: joined,
+          page: a.page,
+          boundaryY: Math.min(a.y, b.y),
+          parentRows: [a, b],
+          remainders,
+        });
+        i++; // consume the second stacked-label row
+        continue;
+      }
+    }
+
+    // Alone: the rail line's whole text is an exact alias ("Experience").
+    const aloneSection = matchExactAlias(a.text);
+    if (aloneSection) {
+      labels.push({
+        section: aloneSection,
+        display: a.text.trim(),
+        page: a.page,
+        boundaryY: a.y,
+        parentRows: [a],
+        remainders: [],
+      });
+      continue;
+    }
+
+    // Inline leading-token (#355 gap 1): the keyword LEADS a merged row that
+    // also carries the section's first entry ("Education  State University …").
+    // Reuses the guarded recognizer, so its FP defenses (item-boundary alias,
+    // `remainderLooksLikeEntry`) apply here too.
+    const inline = matchLeadingTokenHeader(a);
+    if (inline) {
+      labels.push({
+        section: inline.section,
+        display: inline.alias,
+        page: a.page,
+        boundaryY: a.y,
+        parentRows: [a],
+        remainders: [inline.remainder],
+      });
+    }
+  }
+
+  if (labels.length < 2) return null;
+
+  // Rail signature: at least one label carries body content on its own row (the
+  // rail's tell — an ordinary header sits alone, content strictly below it). An
+  // inline label satisfies this by construction (its remainder shares the row).
+  const hasSameRowBody = labels.some(
+    (lbl) =>
+      lbl.remainders.length > 0 ||
+      lbl.parentRows.some((row) =>
+        nonRail.some(
+          (body) =>
+            body.page === row.page &&
+            Math.abs(body.y - row.y) <= RAIL_SAMEROW_EPS,
+        ),
+      ),
+  );
+  if (!hasSameRowBody) return null;
+
+  // Build the sections and assign body lines by `(page, y)` band. Bands are the
+  // labels sorted by that compound key, with `profile` (page/y −∞) catching
+  // everything above the first label on the first page.
+  const labelRows = new Set<PdfLine>();
+  for (const lbl of labels) for (const row of lbl.parentRows) labelRows.add(row);
+
+  const sortedLabels = [...labels].sort(
+    (a, b) => a.page - b.page || a.boundaryY - b.boundaryY,
+  );
+  const profile: PdfSection = { name: "profile", lines: [] };
+  const bands: Array<{ page: number; boundaryY: number; section: PdfSection }> = [
+    { page: -Infinity, boundaryY: -Infinity, section: profile },
+  ];
+  const sectionOf = new Map<RailLabel, PdfSection>();
+  for (const lbl of sortedLabels) {
+    const section: PdfSection = {
+      name: lbl.section,
+      rawHeading: lbl.display,
+      lines: [],
+    };
+    bands.push({ page: lbl.page, boundaryY: lbl.boundaryY, section });
+    sectionOf.set(lbl, section);
+  }
+
+  // A band starts at `(band.page, band.boundaryY)`; a line belongs to the LAST
+  // band (in page-then-y order — `bands` is already sorted) that starts at or
+  // before `(line.page, line.y + TOL)`. An earlier-page band always qualifies
+  // (page is primary), so a page-N line before any page-N label continues the
+  // last page-(N-1) section rather than falling back into `profile`.
+  const bandFor = (page: number, y: number): PdfSection => {
+    let chosen = profile;
+    for (const band of bands) {
+      const starts =
+        band.page < page ||
+        (band.page === page && band.boundaryY <= y + RAIL_BAND_OVERLAP_TOL);
+      if (starts) chosen = band.section;
+    }
+    return chosen;
+  };
+
+  for (const line of lines) {
+    if (labelRows.has(line)) {
+      // The label row itself is not content; any remainders it carries (an inline
+      // first entry, or same-row grid values) are injected once, at the FIRST
+      // parent row's position, so a stacked pair doesn't double-count.
+      const owner = labels.find((lbl) => lbl.parentRows[0] === line);
+      if (owner) for (const rem of owner.remainders) sectionOf.get(owner)!.lines.push(rem);
+      continue;
+    }
+    bandFor(line.page, line.y).lines.push(line);
+  }
+
+  const contentful = bands
+    .slice(1)
+    .filter((b) => b.section.lines.length > 0).length;
+  if (contentful < 2) return null;
+
+  // Reassemble each visual ROW inside an ENTRY-PARSED rail section.
+  // `groupIntoLines` split a "title … date" role row at the 50pt column gap
+  // (#9), so the date landed on its own far-right PdfLine, away from the title —
+  // which strands the `date_range` anchor in the date column and disables
+  // glyphless-bullet detection (both keyed on the entry-header left margin).
+  // Merging same-baseline lines back into one PdfLine restores the visual row the
+  // entry-block parser expects. Scoped to the rail path only (guarded above) AND
+  // to the date-anchored entry sections (`ROW_MERGE_SECTIONS`): the skills token
+  // list must NOT be merged — its splitter (`SKILL_SPLIT_RE`) treats a single
+  // space as intra-token, so welding grid cells with a single space would
+  // collapse many skills into one.
+  for (const lbl of sortedLabels) {
+    if (!ROW_MERGE_SECTIONS.includes(lbl.section)) continue;
+    const section = sectionOf.get(lbl)!;
+    section.lines = mergeRowsByBaseline(section.lines);
+  }
+
+  return [profile, ...sortedLabels.map((lbl) => sectionOf.get(lbl)!)];
+}
+
+/**
+ * Merge PdfLines that share a page and baseline (within `LINE_Y_EPS`) into one
+ * PdfLine per visual row, in reading order (page, then y). Reverses the
+ * column-gap line split (`COLUMN_GAP_THRESHOLD`) for a rail section, where a
+ * single logical row (role title on the left, date on the far right) was
+ * fragmented into separate lines. Each merged row's items are re-sorted by x and
+ * concatenated with `mergeItemText`, so a wide title→date gap becomes a single
+ * space. `gapAbove` is not consumed downstream of the rail path, so it resets.
+ */
+function mergeRowsByBaseline(lines: PdfLine[]): PdfLine[] {
+  const sorted = [...lines].sort((a, b) => {
+    if (a.page !== b.page) return a.page - b.page;
+    return a.y - b.y;
+  });
+  const out: PdfLine[] = [];
+  let bucket: PdfTextItem[] = [];
+  let bucketPage = -1;
+  let bucketY = 0;
+  const flush = () => {
+    if (bucket.length === 0) return;
+    const items = [...bucket].sort((a, b) => a.x - b.x);
+    const ys = items.map((i) => i.y);
+    out.push({
+      page: items[0].page,
+      y: ys.reduce((a, b) => a + b, 0) / ys.length,
+      x: items[0].x,
+      items,
+      text: mergeItemText(items),
+      maxFontSize: Math.max(...items.map((i) => i.fontSize)),
+      allCaps:
+        mergeItemText(items).replace(/[^A-Za-z]/g, "").length > 0 &&
+        mergeItemText(items) === mergeItemText(items).toUpperCase(),
+      gapAbove: 0,
+    });
+    bucket = [];
+  };
+  for (const line of sorted) {
+    if (
+      bucket.length > 0 &&
+      (line.page !== bucketPage || Math.abs(line.y - bucketY) > LINE_Y_EPS)
+    ) {
+      flush();
+    }
+    if (bucket.length === 0) {
+      bucketPage = line.page;
+      bucketY = line.y;
+    }
+    bucket.push(...line.items);
+  }
+  flush();
+  return out;
 }
 
 /**
