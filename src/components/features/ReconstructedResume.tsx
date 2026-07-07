@@ -56,7 +56,7 @@ import {
   ResumeBulletRow,
   BulletFlagLegend,
 } from "./ReconstructedRole.tsx";
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { ModelSelector } from "./ModelSelector.tsx";
 import { useResumeRewriteUi } from "./ResumeRewrite.tsx";
 import type { SectionRewriteApply } from "./SectionRewrite.tsx";
@@ -327,6 +327,7 @@ const EXPERIENCE_FIELD_MAP: Record<
 
 function ExperienceSection({
   heading,
+  sectionLabels,
   groups,
   resumeSections,
   jdContext,
@@ -345,6 +346,11 @@ function ExperienceSection({
 }: {
   /** Verbatim source heading (#285); falls back to "Experience" when absent. */
   heading?: string;
+  /** Per-role verbatim experience-category labels (#311), indexed by
+   *  `experienceIndex`. Present (with ≥2 distinct values) only when the résumé
+   *  carried more than one experience section; otherwise every entry is
+   *  undefined and a single "Experience" heading renders exactly as before. */
+  sectionLabels?: readonly (string | undefined)[];
   /** Pre-built experience groups + the shared "Other" group appended last. */
   groups: BulletGroup[];
   /** Chain-of-sections input for the whole-résumé rewrite CTA (#67). */
@@ -373,6 +379,38 @@ function ExperienceSection({
 }) {
   // "Other" is appended with a null index; real roles carry their index.
   const roleCount = groups.filter((g) => g.experienceIndex !== null).length;
+
+  // Per-#311: split the flat role list into its source experience-category
+  // groups when roles carry distinct `section_label`s. The first group's label
+  // heads the whole section (top `SectionHeading`); each LATER group gets an
+  // inline sub-heading before its first role. With no labels — the common
+  // single-experience-section case — every `labelFor` is undefined, so
+  // `topHeading` is `heading ?? "Experience"` and `inlineHeadings` is all
+  // undefined: nothing extra renders and the output is byte-identical to before.
+  const labelFor = (g: BulletGroup): string | undefined =>
+    g.experienceIndex === null ? undefined : sectionLabels?.[g.experienceIndex];
+  let firstLabel: string | undefined;
+  const inlineHeadings: (string | undefined)[] = [];
+  {
+    let prevLabel: string | undefined;
+    let seenReal = false;
+    for (const g of groups) {
+      if (g.experienceIndex === null) {
+        inlineHeadings.push(undefined);
+        continue;
+      }
+      const label = labelFor(g);
+      if (!seenReal) {
+        firstLabel = label;
+        inlineHeadings.push(undefined);
+      } else {
+        inlineHeadings.push(label && label !== prevLabel ? label : undefined);
+      }
+      if (label) prevLabel = label;
+      seenReal = true;
+    }
+  }
+  const topHeading = firstLabel ?? heading ?? "Experience";
   // Per-section write-back handlers for the whole-résumé review (#211 apply on
   // the whole-résumé path), keyed by the same `experience:<index>` id
   // `buildResumeSections` mints. `obsIndices` is parallel to each section's
@@ -410,7 +448,7 @@ function ExperienceSection({
           where the inline glyphs actually appear), not at the top of the
           section where it reads as detached. */}
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
-        <SectionHeading>{heading ?? "Experience"}</SectionHeading>
+        <SectionHeading>{topHeading}</SectionHeading>
         {hasBullets && <BulletFlagLegend />}
       </div>
       {/* Picker + whole-résumé CTA mounted at the top of Experience —
@@ -431,6 +469,10 @@ function ExperienceSection({
         <div className="flex flex-col gap-4">
           {groups.map((group, i) => {
             const idx = group.experienceIndex;
+            // Inline experience-category sub-heading (#311) before the first role
+            // of each later group; undefined for every role in the common
+            // single-section case, so this renders nothing there.
+            const subHeading = inlineHeadings[i];
             if (idx === null) {
               return (
                 <RoleEntry
@@ -446,7 +488,7 @@ function ExperienceSection({
               idx >= originalCount
                 ? addedExperience[idx - originalCount]
                 : undefined;
-            return (
+            const entry = (
               <RoleEntry
                 key={added ? added.id : idx}
                 group={group}
@@ -468,6 +510,14 @@ function ExperienceSection({
                 }
                 onRemove={added ? () => onRemoveEntry(added.id) : undefined}
               />
+            );
+            return subHeading ? (
+              <Fragment key={added ? added.id : idx}>
+                <SectionHeading>{subHeading}</SectionHeading>
+                {entry}
+              </Fragment>
+            ) : (
+              entry
             );
           })}
         </div>
@@ -965,6 +1015,7 @@ export function ReconstructedResume({
       {achievementsAbove && achievementsSection}
       <ExperienceSection
         heading={result.sections?.sectionHeadings?.get("experience")}
+        sectionLabels={parsed.experience.map((e) => e.section_label)}
         groups={experienceRenderGroups}
         resumeSections={resumeSections}
         jdContext={jdContext}
