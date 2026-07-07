@@ -110,9 +110,11 @@ CHILDREN=("${KEEP[@]}")
   milestones like `/triage-issue` does) and confirm. The parent's milestone is set
   by `/triage-issue` in Step 6 — this value only stamps the *children* in Step 5.
 - **Label:** ensure the grouping label exists — swallow *only* "already exists",
-  surface any other failure (auth, rate limit) instead of hiding it:
+  surface any other failure (auth, rate limit) instead of hiding it. Guard it with
+  `$DRY_RUN` so the plan region stays truly write-free (the dry-run gate lets Step 2
+  run — label-create is the one write here, so it must be gated explicitly):
   ```bash
-  if ! gh label create "batch:$SLUG" --repo "$REPO" --color BFD4F2 \
+  if [[ -z $DRY_RUN ]] && ! gh label create "batch:$SLUG" --repo "$REPO" --color BFD4F2 \
         --description "Grouped for single-batch implementation" 2>/tmp/lbl.err; then
     grep -q "already exists" /tmp/lbl.err || { echo "✗ label create failed:"; cat /tmp/lbl.err; exit 1; }
   fi
@@ -161,7 +163,12 @@ URL=$(gh issue create --repo "$REPO" \
   --label "batch:$SLUG" \
   ${ASSIGNEE:+--assignee "$ASSIGNEE"})
 PARENT="${URL##*/}"    # basename of the printed URL = new issue number
+[[ "$PARENT" =~ ^[0-9]+$ ]] || { echo "✗ parent create failed:"; echo "$URL"; exit 1; }
 ```
+
+Guard the capture: if the create fails (rate limit, transient, bad label), `$URL`
+is empty, `$PARENT` is `""`, and Step 4 would hit `repos/$REPO/issues//sub_issues`
+— a confusing 404 loop instead of a clear failure. The numeric check stops it here.
 
 ### Step 4 — Wire children as native sub-issues (idempotent)
 
@@ -209,11 +216,19 @@ done
 ```
 
 If `--order A,B,C` given (already validated in Step 2), wire `blocked_by` so B is
-blocked by A, C by B — each edge uses the **blocking** issue's internal id, typed `-F`:
+blocked by A, C by B — each edge uses the **blocking** issue's internal id, typed `-F`.
+Mirror Step 4's idempotency: preflight the child's existing `blocked_by` set and skip
+an edge that's already there (a bare re-POST 422s on re-run), then verify the edge
+landed:
 ```bash
 for ((i=1; i<${#ORDER[@]}; i++)); do
-  BLOCKER_ID=$(gh api "repos/$REPO/issues/${ORDER[i-1]}" --jq .id)
-  gh api -X POST "repos/$REPO/issues/${ORDER[i]}/dependencies/blocked_by" -F issue_id="$BLOCKER_ID"
+  BLOCKED="${ORDER[i]}"; BLOCKER="${ORDER[i-1]}"
+  EXISTING=$(gh api "repos/$REPO/issues/$BLOCKED/dependencies/blocked_by" --jq '.[].number' 2>/dev/null)
+  grep -qx "$BLOCKER" <<<"$EXISTING" && { echo "#$BLOCKED already blocked by #$BLOCKER — skip"; continue; }
+  BLOCKER_ID=$(gh api "repos/$REPO/issues/$BLOCKER" --jq .id)
+  gh api -X POST "repos/$REPO/issues/$BLOCKED/dependencies/blocked_by" -F issue_id="$BLOCKER_ID"
+  gh api "repos/$REPO/issues/$BLOCKED/dependencies/blocked_by" --jq '.[].number' | grep -qx "$BLOCKER" \
+    || echo "✗ #$BLOCKED → blocked_by #$BLOCKER did not land — check before reporting success"
 done
 ```
 
