@@ -118,7 +118,7 @@ Feature code (`src/components/features/**`) must reuse primitives, not hand-roll
 ```bash
 # raw interactive elements / hand-rolled UI in feature code → Blocking
 git diff "origin/$BASE...HEAD" -- 'src/components/features/**' \
-  | grep -nE '^\+.*<button|<dialog|<input ' | grep -v 'import'
+  | grep -nE '^\+.*<(button|dialog|input )' | grep -v 'import'
 # a new file under src/components/ without a Reuse analysis → soft-gate warn
 git diff --name-only --diff-filter=A "origin/$BASE...HEAD" -- 'src/components/**'
 ```
@@ -148,7 +148,7 @@ flags them, and it re-attributes a *pre-existing* dup-export the moment your dif
 touches its line):
 
 ```bash
-npx fallow --base "origin/$BASE" 2>&1 | tail -30   # or: npm run verify (full gate)
+npx fallow audit --base "origin/$BASE" 2>&1 | tail -30   # or: npm run verify (full gate)
 ```
 
 A new `export const`/`function` with no in-repo consumer, or a CRAP-score spike on a
@@ -219,8 +219,9 @@ comments** (inline needs a diff-line that exists in the patch or it `422`s; the
 top-level body never does):
 
 ```bash
+# event flag: --request-changes | --approve | --comment
 gh pr review "$PR_NUM" --repo "$REPO" \
-  --request-changes \                 # or --approve / --comment
+  --request-changes \
   --body-file /tmp/review.md
 ```
 
