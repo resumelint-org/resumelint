@@ -10,7 +10,6 @@ import {
   INTL_LOCATION_RE,
   US_STATE_CODE_RE,
   COUNTRY_GAZETTEER,
-  DATE_RANGE_RE,
   matchSectionHeader,
 } from "../regex.ts";
 import { looksLikeTitle, looksLikeCompany, finalizeEntries } from "./shared.ts";
@@ -207,23 +206,18 @@ const KNOWN_MULTIWORD_US_CITY_RE =
 
 /** Recover a location from an anchor-row cell of a "Company | Location Dates"
  *  header line — the "New York, NY" cell of "Globex Financial | New York, NY
- *  August 2024 - Present" (#373). `stripDateRange` in `parseEntryBlocks` peels
- *  the trailing dates off the anchor line before it reaches disambiguation, so
- *  the cell is normally a clean bare "City, ST" / "City, Country" — but the
- *  location sits BEFORE the (now-removed) dates, so `stripLocationSuffix`'s
- *  end-anchored passes never claimed it and it was dropped. Return the cell when
- *  it is a whole-string bare location. Falls back to peeling a still-glued date
- *  range (a format `stripDateRange` didn't catch) before the check, so the fold
- *  is recovered whether or not the dates were pre-stripped. */
+ *  August 2024 - Present" (#373). `parseEntryBlocks` runs `stripDateRange` on the
+ *  anchor line before it reaches disambiguation, so the cell is a clean bare
+ *  "City, ST" / "City, Country" — but the location sits BEFORE the (removed)
+ *  dates, so `stripLocationSuffix`'s end-anchored passes never claimed it and it
+ *  was dropped. Return the cell when it is a whole-string bare location.
+ *
+ *  No date-range peel here: this only ever runs on the anchor line, which
+ *  `stripDateRange` has already cleared with the same `DATE_RANGE_RE`, so any
+ *  glued range is gone before this sees the cell (#409 review). */
 function locationFromAnchorCell(cell: string): string | undefined {
   const c = cell.trim();
-  if (isBareLocationString(c)) return c;
-  const peeled = stripDanglingSeparator(
-    c.replace(DATE_RANGE_RE, " ").replace(/\s{2,}/g, " "),
-  );
-  return peeled && peeled !== c && isBareLocationString(peeled)
-    ? peeled
-    : undefined;
+  return isBareLocationString(c) ? c : undefined;
 }
 
 function stripLocationSuffix(s: string): {
