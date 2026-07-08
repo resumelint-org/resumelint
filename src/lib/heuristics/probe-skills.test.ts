@@ -82,6 +82,10 @@ function looseSkillsReason(raw: string): string | null {
 describe.runIf(process.env.RL_SKILLS_PDF)(
   "skills dev probe (RL_SKILLS_PDF)",
   () => {
+    // Deliberate monolithic diagnostic harness (mirrors probe-contact /
+    // probe-experience): one linear read-out of parse → verdict so the whole
+    // triage is visible in a single scroll. Not production logic.
+    // fallow-ignore-next-line complexity
     it("extracts + verifies the skills section for RL_SKILLS_PDF", async () => {
       const path = process.env.RL_SKILLS_PDF!;
       const outDir =

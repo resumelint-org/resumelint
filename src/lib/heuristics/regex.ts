@@ -441,6 +441,11 @@ export function matchSectionAnchorToken(text: string): SectionName | null {
  * open of an already-open section — that repeat is an institution entry sitting
  * under its real header, not a new boundary (#258 Layer B).
  */
+// Tiered matcher (exact-alias → split-letter → anchor-fallback), each tier a
+// deliberate branch; the #414 leading-glyph guard adds one more. Splitting the
+// tiers into helpers would obscure their fixed order, which is the correctness
+// contract here — keep them linear and readable.
+// fallow-ignore-next-line complexity
 export function matchSectionHeaderDetailed(
   text: string,
 ): { section: SectionName; viaAnchorFallback: boolean } | null {
