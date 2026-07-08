@@ -180,8 +180,11 @@ for N in "${CHILDREN[@]}"; do
   grep -qx "$N" <<<"$LINKED" && { echo "#$N already linked — skip"; continue; }
   CHILD_ID=$(gh api "repos/$REPO/issues/$N" --jq .id)
   [[ "$CHILD_ID" =~ ^[0-9]+$ ]] || { echo "✗ can't resolve id for #$N — skipping link"; continue; }
-  gh api -X POST "repos/$REPO/issues/$PARENT/sub_issues" -F sub_issue_id="$CHILD_ID" >/dev/null 2>&1 \
-    && echo "linked #$N"
+  if gh api -X POST "repos/$REPO/issues/$PARENT/sub_issues" -F sub_issue_id="$CHILD_ID" >/dev/null 2>/tmp/link.err; then
+    echo "linked #$N"
+  else
+    grep -q "already" /tmp/link.err || { echo "✗ link #$N failed:"; cat /tmp/link.err; }
+  fi
 done
 ```
 **Verify by diffing the readback against the input set** — never assume the loop
@@ -268,14 +271,18 @@ if (( ${#ORDER[@]} > 1 )); then
   for CUR in "${ORDER[@]}"; do
     if [[ -n $PREV ]]; then
       HAVE=$(gh api "repos/$REPO/issues/$CUR/dependencies/blocked_by" --jq '[.[].number]|sort|join(",")' 2>/dev/null)
-      if grep -qx "$PREV" < <(printf '%s\n' "${HAVE//,/$'\n'}"); then
+      # Split on comma with `tr`, NOT `${HAVE//,/$'\n'}` — zsh leaves the ANSI-C
+      # `$'\n'` literal in the replacement (bash expands it), so that idiom is itself
+      # not zsh-safe; `tr` behaves identically in both shells.
+      if grep -qx "$PREV" < <(printf '%s\n' "$HAVE" | tr ',' '\n'); then
         echo "✓ #$CUR blocked_by #$PREV   (stored: ${HAVE:-none})"
       else
         echo "✗ #$CUR MISSING blocked_by #$PREV   (stored: ${HAVE:-none}) — fix before reporting success"
       fi
-      for h in ${HAVE//,/ }; do
-        [[ "$h" == "$PREV" ]] || echo "⚠ #$CUR also blocked_by #$h — not in the intended chain; remove if spurious"
-      done
+      while IFS= read -r h; do
+        [[ -z $h || $h == "$PREV" ]] && continue
+        echo "⚠ #$CUR also blocked_by #$h — not in the intended chain; remove if spurious"
+      done < <(printf '%s\n' "$HAVE" | tr ',' '\n')
     fi
     PREV="$CUR"
   done
