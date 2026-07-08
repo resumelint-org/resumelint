@@ -10,6 +10,7 @@ import {
   INTL_LOCATION_RE,
   US_STATE_CODE_RE,
   COUNTRY_GAZETTEER,
+  DATE_RANGE_RE,
   matchSectionHeader,
 } from "../regex.ts";
 import { looksLikeTitle, looksLikeCompany, finalizeEntries } from "./shared.ts";
@@ -203,6 +204,27 @@ const LOCALITY_SUFFIX_RE =
  *  `BARE_LOCATION_RE`. */
 const KNOWN_MULTIWORD_US_CITY_RE =
   /New York City|New York|New Orleans|San Francisco|San Diego|San Jose|San Antonio|Los Angeles|Las Vegas|Salt Lake City/;
+
+/** Recover a location from an anchor-row cell of a "Company | Location Dates"
+ *  header line — the "New York, NY" cell of "Globex Financial | New York, NY
+ *  August 2024 - Present" (#373). `stripDateRange` in `parseEntryBlocks` peels
+ *  the trailing dates off the anchor line before it reaches disambiguation, so
+ *  the cell is normally a clean bare "City, ST" / "City, Country" — but the
+ *  location sits BEFORE the (now-removed) dates, so `stripLocationSuffix`'s
+ *  end-anchored passes never claimed it and it was dropped. Return the cell when
+ *  it is a whole-string bare location. Falls back to peeling a still-glued date
+ *  range (a format `stripDateRange` didn't catch) before the check, so the fold
+ *  is recovered whether or not the dates were pre-stripped. */
+function locationFromAnchorCell(cell: string): string | undefined {
+  const c = cell.trim();
+  if (isBareLocationString(c)) return c;
+  const peeled = stripDanglingSeparator(
+    c.replace(DATE_RANGE_RE, " ").replace(/\s{2,}/g, " "),
+  );
+  return peeled && peeled !== c && isBareLocationString(peeled)
+    ? peeled
+    : undefined;
+}
 
 function stripLocationSuffix(s: string): {
   text: string;
@@ -704,6 +726,32 @@ function disambiguateCompanyTitle(
       //      (the #325 false-positive class reached via `team` instead of `title`).
       location = team;
       team = undefined;
+    }
+  }
+
+  // (3c) #373 — recover a per-entry location from an anchor-row cell that folds
+  //      "<City, ST> <dates>" with no separator ("Globex Financial | New York,
+  //      NY August 2024 - Present" — the second `|` cell). The date parse already
+  //      took the range into `block.dates`, but the location residue never
+  //      reached a field. Scan the anchor line's non-company segments; if one
+  //      yields a bare location once the date range is peeled, use it (and clear
+  //      the segment from `team` if it landed there).
+  if (!location && anchorIdx !== undefined) {
+    for (const s of splits) {
+      // Skip the company and the title cells: a location cell that landed in
+      // `title` is the empty-title "Company · City, ST" export shape, which
+      // step 5 rescues correctly (title → "", location set) — claiming it here
+      // would set `location` and block that rescue, orphaning the location in
+      // `title`. Only an unused/team location cell is claimed here.
+      if (s.source !== anchorIdx || s.text === company || s.text === title) {
+        continue;
+      }
+      const loc = locationFromAnchorCell(s.text);
+      if (loc) {
+        location = loc;
+        if (team === s.text) team = undefined;
+        break;
+      }
     }
   }
 
