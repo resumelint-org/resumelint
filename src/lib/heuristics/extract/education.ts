@@ -641,8 +641,15 @@ function educationFromChunk(chunk: string[]): {
       if (instLine === degreeLine && degreeMatch) {
         const parts = instLine.split(/\s+[–—-]\s+/);
         if (parts.length >= 2) {
-          institution = parts[parts.length - 1].trim();
-          const head = parts.slice(0, -1).join(" — ");
+          // Pick the part carrying an institution hint ("University", "College",
+          // …) as the institution. If none carries a hint, fall back to the
+          // last part (the #364 primary shape "Degree in Field — Institution"
+          // where the hint might be missing on an acronym school). Re-parse
+          // degree/field from the remaining parts joined back with em-dash.
+          const hintIdx = parts.findIndex((p) => INSTITUTION_HINTS.test(p));
+          const instIdx = hintIdx >= 0 ? hintIdx : parts.length - 1;
+          institution = parts[instIdx].trim();
+          const head = parts.filter((_, i) => i !== instIdx).join(" — ");
           ({ degree, field } = parseDegreeAndField(head));
         } else {
           // No separator — degree-strip and take whatever remains.

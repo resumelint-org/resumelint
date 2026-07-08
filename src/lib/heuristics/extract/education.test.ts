@@ -184,6 +184,19 @@ describe("extractEducation — coursework loop must not over-consume (#184)", ()
     expect(value[0].field).toBe("Data Science");
   });
 
+  it("picks the institution-hint part when the shape is 'Institution — Degree — Year' (multi-part)", () => {
+    // Reverse ordering of the #364 case: institution FIRST, then degree, then
+    // a trailing year. The fix must select the part carrying an INSTITUTION_HINTS
+    // token instead of blindly taking the last part.
+    const { value } = extractEducation(
+      mkEduSection([
+        "Stanford University — B.S. Computer Science — 2019",
+      ]),
+    );
+    expect(value[0].institution).toContain("Stanford");
+    expect(value[0].degree).toMatch(/B\.S\./);
+  });
+
   // #366 — LaTeX two-column line assembly joins institution and city with a
   // single space. The 1-space fallback splits when the surviving institution
   // prefix has ≥2 tokens; a single-token remainder ("Stanford CA") is
