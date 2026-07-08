@@ -652,14 +652,13 @@ function educationFromChunk(chunk: string[]): {
           const head = parts.filter((_, i) => i !== instIdx).join(" — ");
           ({ degree, field } = parseDegreeAndField(head));
         } else {
-          // No separator — degree-strip and take whatever remains.
-          institution = instLine
-            .replace(degreeMatch[0], "")
-            .replace(/\s*\|\s*/g, " ")
-            .replace(/^\s*(?:in|of)\s+/i, "")
-            .replace(/^\s*[-–—,:]\s*/, "")
-            .replace(/[,|]+$/, "")
-            .trim();
+          // No em-dash separator to slice on — keep the raw line as the
+          // institution (behavior preserved from before #364; the strip-then-
+          // maybe-mangle path only pays off when the split cleanly isolates
+          // the institution). A comma-separated single-line entry like
+          // "Associate degree, H.R. Management, Bellows College" round-trips
+          // consistently that way.
+          institution = instLine.trim();
         }
       } else {
         institution = instLine.trim();
