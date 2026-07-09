@@ -6,6 +6,8 @@ import {
   classifyProfile,
   profilesFromUrls,
   PROFILE_HOSTS,
+  PROFILE_QUICK_PICKS,
+  otherRecognizedNetworks,
 } from "./profile-registry.ts";
 
 describe("classifyProfile — known hosts", () => {
@@ -145,5 +147,34 @@ describe("PROFILE_HOSTS — contributor-extensible registry", () => {
       expect(typeof rule.network).toBe("string");
       expect(rule.network.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("PROFILE_QUICK_PICKS — guided-add chips", () => {
+  it("derives one chip per host carrying a quickPick, plus a Portfolio catch-all", () => {
+    const hostPicks = PROFILE_HOSTS.filter((h) => h.quickPick).map(
+      (h) => h.network,
+    );
+    const labels = PROFILE_QUICK_PICKS.map((p) => p.label);
+    // Every quick-pick host surfaces as a chip, in registry order…
+    expect(labels.slice(0, hostPicks.length)).toEqual(hostPicks);
+    // …and Portfolio is appended as the host-less personal-site catch-all.
+    expect(labels).toContain("Portfolio");
+  });
+
+  it("every chip pre-fills an https:// prefix and names a handle hint", () => {
+    for (const pick of PROFILE_QUICK_PICKS) {
+      expect(pick.prefix.startsWith("https://")).toBe(true);
+      expect(pick.hint.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("otherRecognizedNetworks lists recognized hosts NOT already a chip", () => {
+    const others = otherRecognizedNetworks();
+    const chipLabels = new Set(PROFILE_QUICK_PICKS.map((p) => p.label));
+    // No overlap with the chips…
+    for (const name of others) expect(chipLabels.has(name)).toBe(false);
+    // …and it surfaces a known tail host (ORCID is registered, not a chip).
+    expect(others).toContain("ORCID");
   });
 });

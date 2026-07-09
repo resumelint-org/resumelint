@@ -25,7 +25,8 @@
 import { EditableField } from "@design-system";
 import { formatLinkDisplay } from "../../lib/contact.ts";
 import type { AddedProfile } from "../../hooks/useEditableParse.ts";
-import { InlineBulletAdd, RemoveButton } from "./ReconstructedAdd.tsx";
+import { RemoveButton } from "./ReconstructedAdd.tsx";
+import { ProfileLinkAdd } from "./ProfileLinkAdd.tsx";
 
 interface ContactExtraLinksProps {
   profiles: readonly AddedProfile[];
@@ -72,11 +73,7 @@ export function ContactExtraLinks({
       ))}
       <span className="inline-flex items-center gap-x-2">
         {profiles.length > 0 && <span className="text-content-muted">·</span>}
-        <InlineBulletAdd
-          onAdd={onAdd}
-          label="Add link"
-          placeholder="https://…"
-        />
+        <ProfileLinkAdd onAdd={onAdd} label="Add a profile" stayOpenAfterAdd />
       </span>
     </p>
   );

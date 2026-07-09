@@ -108,7 +108,7 @@ describe("ContactCard", () => {
     expect(dotted?.className).toContain("decoration-dotted");
   });
 
-  it("renders extra added-profile links with a slug + '+ Add link' affordance (issue 335)", () => {
+  it("renders extra added-profile links with a slug + guided '+ Add a profile' affordance (issue 335)", () => {
     const el = render(makeResult(), {
       overrides: {},
       onFieldChange: () => {},
@@ -134,8 +134,8 @@ describe("ContactCard", () => {
     // Known-host slug + unknown-host slug (hostname is the brand-neutral label).
     expect(text).toContain("gitlab.com/jane");
     expect(text).toContain("example.dev/jane");
-    // The "+ Add link" progressive-disclosure pill.
-    expect(el.querySelector('[aria-label="Add link"]')).not.toBeNull();
+    // The "+ Add a profile" progressive-disclosure pill.
+    expect(el.querySelector('[aria-label="Add a profile"]')).not.toBeNull();
     // Per-profile open-in-new-tab anchor + remove control.
     expect(
       el.querySelector('a[href="https://gitlab.com/jane"]'),
@@ -147,7 +147,7 @@ describe("ContactCard", () => {
 
   it("does not render the extra-links affordance on a display-only card (issue 335)", () => {
     const el = render(makeResult({ email: "jane@example.com" }, { email: 0.9 }));
-    expect(el.querySelector('[aria-label="Add link"]')).toBeNull();
+    expect(el.querySelector('[aria-label="Add a profile"]')).toBeNull();
   });
 
   it("renders a detected link as a clickable new-tab slug anchor", () => {

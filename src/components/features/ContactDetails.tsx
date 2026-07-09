@@ -31,6 +31,7 @@ import type {
   AddedProfile,
 } from "../../hooks/useEditableParse.ts";
 import { ContactExtraLinks } from "./ContactExtraLinks.tsx";
+import { ProfileLinkAdd } from "./ProfileLinkAdd.tsx";
 
 /** The inline-editable contact fields, mapped 1:1 to their `ContactOverrides`
  *  key. Includes the link fields — a detected GitHub/portfolio/website URL is
@@ -276,6 +277,19 @@ function renderLink(
         </span>
       );
     }
+    // An ABSENT required link (the brand-neutral "Professional profile" row is
+    // the only one that reaches here — optional links skip when undetected) gets
+    // the guided network picker instead of a bare URL field, so a naive user
+    // learns what counts and which networks are accepted (#335-followup).
+    if (field.reason === "absent") {
+      return (
+        <ProfileLinkAdd
+          label={`Add a ${field.label.toLowerCase()}`}
+          onAdd={(url) => commit(ovKey, url)}
+        />
+      );
+    }
+    // Low-confidence: keep the editable value so the user can confirm/correct it.
     return <EditableValue field={field} ovKey={ovKey} commit={commit} />;
   }
   if (field.gated) {

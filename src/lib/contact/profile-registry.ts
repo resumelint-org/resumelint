@@ -31,6 +31,12 @@ interface HostRule {
   /** Human-facing network label shown in the UI. */
   network: string;
   kind: ProfileLink["kind"];
+  /** UI-only guided-add hint. When set, this host surfaces as a quick-pick chip
+   *  in the profile-add affordance (`PROFILE_QUICK_PICKS`): tapping the chip
+   *  pre-fills `prefix` and the caret lands after it so the user types only
+   *  `hint` (their handle). Ordering in `PROFILE_HOSTS` sets the chip order.
+   *  Kept here so "which networks do we recognize" has ONE source of truth. */
+  quickPick?: { prefix: string; hint: string };
 }
 
 /**
@@ -40,9 +46,24 @@ interface HostRule {
  * matching a look-alike substring.
  */
 export const PROFILE_HOSTS: readonly HostRule[] = [
-  { match: /(^|\.)linkedin\.com$/i, network: "LinkedIn", kind: "social" },
-  { match: /(^|\.)github\.com$/i, network: "GitHub", kind: "code" },
-  { match: /(^|\.)gitlab\.com$/i, network: "GitLab", kind: "code" },
+  {
+    match: /(^|\.)linkedin\.com$/i,
+    network: "LinkedIn",
+    kind: "social",
+    quickPick: { prefix: "https://linkedin.com/in/", hint: "your-handle" },
+  },
+  {
+    match: /(^|\.)github\.com$/i,
+    network: "GitHub",
+    kind: "code",
+    quickPick: { prefix: "https://github.com/", hint: "your-handle" },
+  },
+  {
+    match: /(^|\.)gitlab\.com$/i,
+    network: "GitLab",
+    kind: "code",
+    quickPick: { prefix: "https://gitlab.com/", hint: "your-handle" },
+  },
   { match: /(^|\.)codeberg\.org$/i, network: "Codeberg", kind: "code" },
   { match: /(^|\.)kaggle\.com$/i, network: "Kaggle", kind: "code" },
   { match: /(^|\.)huggingface\.co$/i, network: "Hugging Face", kind: "code" },
@@ -53,6 +74,46 @@ export const PROFILE_HOSTS: readonly HostRule[] = [
   { match: /(^|\.)substack\.com$/i, network: "Substack", kind: "writing" },
   { match: /(^|\.)medium\.com$/i, network: "Medium", kind: "writing" },
 ];
+
+/** One tappable network chip in the guided profile-add affordance. */
+export interface ProfileQuickPick {
+  /** Chip label + the profile's network name (e.g. "LinkedIn"). */
+  label: string;
+  /** URL pre-filled when the chip is tapped; the caret lands after it. */
+  prefix: string;
+  /** Ghost hint for the part the user still types (their handle / domain). */
+  hint: string;
+}
+
+/**
+ * The quick-pick network chips shown in the guided profile-add UI, DERIVED from
+ * `PROFILE_HOSTS` (every host carrying a `quickPick`) plus a generic
+ * "Portfolio" catch-all for a personal site (which has no fixed host). Deriving
+ * keeps the picker in lockstep with what `classifyProfile` recognizes — adding
+ * a `quickPick` to a host is the ONE-LINE change that surfaces a new chip.
+ */
+export const PROFILE_QUICK_PICKS: readonly ProfileQuickPick[] = [
+  ...PROFILE_HOSTS.filter((h) => h.quickPick).map((h) => ({
+    label: h.network,
+    prefix: h.quickPick!.prefix,
+    hint: h.quickPick!.hint,
+  })),
+  { label: "Portfolio", prefix: "https://", hint: "yourname.com" },
+];
+
+/**
+ * Recognized network names NOT already offered as a quick-pick chip — feeds the
+ * "…and more are recognized automatically" helper so the promise stays truthful
+ * as hosts are added/removed (single source of truth: {@link PROFILE_HOSTS}).
+ */
+export function otherRecognizedNetworks(): string[] {
+  const picked = new Set(PROFILE_QUICK_PICKS.map((p) => p.label));
+  const names: string[] = [];
+  for (const host of PROFILE_HOSTS) {
+    if (!picked.has(host.network)) names.push(host.network);
+  }
+  return names;
+}
 
 /**
  * Classify one URL into a `ProfileLink`. Normalizes the URL first (reusing the
