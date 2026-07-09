@@ -242,7 +242,7 @@ function stripLocationSuffix(s: string): {
  * before the comma), and "Marketing Manager, San Francisco" (location tail) do
  * not. Returns null when no guarded split applies.
  */
-function splitRoleComma(h: string): [string, string] | null {
+export function splitRoleComma(h: string): [string, string] | null {
   const comma = h.indexOf(",");
   if (comma <= 0) return null;
   const before = h.slice(0, comma).trim();
@@ -533,8 +533,16 @@ function mapTitleFirst(splits: Split[], anchorIdx: number | undefined): Fields {
     splits[1] !== undefined &&
     splits[0]?.via === "comma" &&
     splits[0]?.source === splits[1].source;
+  // The real company lives on a SEPARATE delimited anchor line below the comma
+  // header ("Company | Location Dates"). When the comma header IS itself the
+  // anchor line (a single-line "Title, Team  Dates" role, source === anchorIdx),
+  // its leading segment is the title — not a company — so there is no anchor
+  // company to borrow and we must not treat splits[0] as one (that would set
+  // company = the title, #382). Require the anchor to be a different source line.
   const anchorSplits =
-    anchorIdx !== undefined ? splits.filter((s) => s.source === anchorIdx) : [];
+    anchorIdx !== undefined && anchorIdx !== splits[0]?.source
+      ? splits.filter((s) => s.source === anchorIdx)
+      : [];
   const anchorCompany =
     anchorSplits.length >= 2 && !looksLikeLocationTail(anchorSplits[0].text)
       ? anchorSplits[0].text

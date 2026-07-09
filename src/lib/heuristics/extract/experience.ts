@@ -5,8 +5,11 @@ import type { ResumeExperience } from "../../score/types.ts";
 import type { PdfSection } from "../sections.ts";
 import { parseEntryBlocks } from "../entry-blocks.ts";
 import type { EntryBlock } from "../entry-blocks.ts";
-import { finalizeEntries } from "./shared.ts";
-import { disambiguateCompanyTitle } from "./experience-disambiguate.ts";
+import { finalizeEntries, looksLikeCompany } from "./shared.ts";
+import {
+  disambiguateCompanyTitle,
+  splitRoleComma,
+} from "./experience-disambiguate.ts";
 
 // ── Experience ──────────────────────────────────────────────────────────────
 
@@ -54,25 +57,117 @@ export function extractExperience(
       collectBody: true,
     });
   }
+  // Detect a shared employer banner heading a run of "Title, Team" roles (#382):
+  // one employer stated once above a group, each role below carrying only its
+  // "Title, Team" header. The per-role blocks lack the banner (it sits above the
+  // group, out of each follower's header window), so attribute it here before
+  // mapping.
+  const banners = detectSharedBanners(blocks);
   // Drop a date-only phantom — a block with neither title nor company (#145).
   // Experience has no single title axis, so we keep a role that has either.
   return finalizeEntries(
-    blocks.map(experienceFromBlock),
+    blocks.map((block, i) => experienceFromBlock(block, banners.get(i))),
     (e) => e.title !== "" || e.company !== "",
   );
 }
 
+/**
+ * The employer named by a block that HEADS a shared-employer banner group
+ * (#382): its first header line is a standalone org (`looksLikeCompany`) sitting
+ * ABOVE the date anchor (`anchorHeaderIndex >= 1`), and its own role header (the
+ * anchor line) is itself a "Title, Team" comma shape — so the whole group is the
+ * homogeneous "one banner over N × `Title, Team`" layout, not a coincidental
+ * stacked "Company / Title" role above an unrelated comma role. Returns the
+ * banner employer, or undefined when the block is not such a head.
+ */
+function bannerEmployerOf(block: EntryBlock): string | undefined {
+  const idx = block.anchorHeaderIndex ?? -1;
+  if (idx < 1) return undefined;
+  const lead = block.headerLines[0];
+  if (!lead || !looksLikeCompany(lead)) return undefined;
+  const anchorLine = block.headerLines[idx];
+  if (!anchorLine || !splitRoleComma(anchorLine)) return undefined;
+  return lead;
+}
+
+/**
+ * True when a block is a FOLLOWER under a shared employer banner (#382): a single
+ * "Title, Team" header line (the anchor), where the post-comma segment is NOT
+ * itself an employer (`!looksLikeCompany`) — i.e. the role names no company of
+ * its own, so the group banner above supplies it. A role whose header carries its
+ * own employer ("Engineer, Globex Inc") reads as `looksLikeCompany` on the
+ * post-comma segment and is left alone (the issue's "last role maps correctly"
+ * case).
+ */
+function isCommaFollower(block: EntryBlock): boolean {
+  if (block.headerLines.length !== 1) return false;
+  const rc = splitRoleComma(block.headerLines[0]);
+  return rc !== null && !looksLikeCompany(rc[1]);
+}
+
+/**
+ * Map each block index to its shared-employer banner (#382). A banner head
+ * (`bannerEmployerOf`) claims the contiguous run of comma-follower blocks
+ * (`isCommaFollower`) directly below it; the run stops at the first block that is
+ * not a follower (its own employer, a differently-shaped role, or a new banner).
+ * Only activates when at least one follower exists, so a lone banner-shaped role
+ * is untouched.
+ */
+function detectSharedBanners(blocks: EntryBlock[]): Map<number, string> {
+  const out = new Map<number, string>();
+  for (let i = 0; i < blocks.length; i++) {
+    const employer = bannerEmployerOf(blocks[i]);
+    if (!employer) continue;
+    const followers: number[] = [];
+    for (let j = i + 1; j < blocks.length; j++) {
+      if (!isCommaFollower(blocks[j])) break;
+      followers.push(j);
+    }
+    for (const j of followers) out.set(j, employer);
+  }
+  return out;
+}
+
+/** Resolve a block's title/company/team/location. Runs the shared header
+ *  disambiguation, then — for a shared-banner follower (#382) — overrides: the
+ *  lone "Title, Team" header names no company of its own, so route the pre-comma
+ *  segment to title, the post-comma segment to team, and take the company from
+ *  the group banner. */
+function resolveBlockFields(
+  block: EntryBlock,
+  bannerEmployer: string | undefined,
+): { title?: string; company?: string; team?: string; location?: string } {
+  const mapped = disambiguateCompanyTitle(
+    block.headerLines,
+    block.anchorHeaderIndex,
+  );
+  if (!bannerEmployer) return mapped;
+  const rc = splitRoleComma(block.headerLines[0] ?? "");
+  return {
+    title: rc ? rc[0] : mapped.title,
+    company: bannerEmployer,
+    team: rc ? rc[1] : mapped.team,
+    location: mapped.location,
+  };
+}
+
 /** Map one dated entry block to a `ResumeExperience` and its confidence score.
  *  Extracted from `extractExperience` to keep each function below the
- *  complexity threshold; mirrors `projectFromBlock` / `achievementFromBlock`. */
-function experienceFromBlock(block: EntryBlock): {
+ *  complexity threshold; mirrors `projectFromBlock` / `achievementFromBlock`.
+ *  `bannerEmployer` (set for a shared-banner follower, #382) overrides the
+ *  employer: the role's single "Title, Team" header supplies title + team and the
+ *  group banner supplies the company. */
+function experienceFromBlock(
+  block: EntryBlock,
+  bannerEmployer?: string,
+): {
   entry: ResumeExperience;
   score: number;
 } {
   const { dates } = block;
-  const { title, company, team, location } = disambiguateCompanyTitle(
-    block.headerLines,
-    block.anchorHeaderIndex,
+  const { title, company, team, location } = resolveBlockFields(
+    block,
+    bannerEmployer,
   );
   const description = block.body;
 
