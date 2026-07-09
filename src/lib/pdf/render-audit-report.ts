@@ -27,6 +27,7 @@
 
 import { loadPdfLibOnce, type PdfLibParts } from "./load-pdf-lib.ts";
 import { toWinAnsi } from "./render-ats-pdf.ts";
+import { wrapWordsToLines } from "./text-wrap.ts";
 import { getScoreLabel, getScoreTier } from "../score/score.ts";
 import { LAYOUT_TRIGGER_BLURBS } from "../heuristics/trigger-copy.ts";
 import type { AuditReportInput } from "../report/serialize.ts";
@@ -94,19 +95,11 @@ class ReportLayout {
   private wrap(text: string, font: PdfFont, size: number, maxWidth: number): string[] {
     const words = text.split(/\s+/).filter(Boolean);
     if (words.length === 0) return [""];
-    const lines: string[] = [];
-    let current = words[0];
-    for (let i = 1; i < words.length; i++) {
-      const candidate = `${current} ${words[i]}`;
-      if (font.widthOfTextAtSize(candidate, size) <= maxWidth) {
-        current = candidate;
-      } else {
-        lines.push(current);
-        current = words[i];
-      }
-    }
-    lines.push(current);
-    return lines;
+    // Break long words here (unlike the résumé renderer): the identity header
+    // joins raw URLs, each a single whitespace-free "word" that can exceed the
+    // content width and would otherwise be drawn straight off the page (#421
+    // Blocking #5). The report has no re-parse invariant to protect.
+    return wrapWordsToLines(words, font, size, maxWidth, true);
   }
 
   drawText(
@@ -223,8 +216,11 @@ export async function renderAuditReportPdf(
   const doc = await PDFDocument.create();
   doc.setTitle("Resume Audit Report");
 
-  const regular = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  // Independent embeds — run in parallel (mirrors render-ats-pdf.ts).
+  const [regular, bold] = await Promise.all([
+    doc.embedFont(StandardFonts.Helvetica),
+    doc.embedFont(StandardFonts.HelveticaBold),
+  ]);
 
   const black = rgb(0.1, 0.1, 0.1);
   const gray = rgb(0.55, 0.55, 0.55);

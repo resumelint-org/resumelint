@@ -947,4 +947,85 @@ describe("applyOverrides — profiles[] (#335)", () => {
     );
     expect(parsed).toEqual(snapshot);
   });
+
+  // #421 Blocking #1: a LinkedIn/GitHub link added via the guided picker lands
+  // in `addedProfiles`, but the scorer + contact gap read the legacy `_url`
+  // slot — so the add must back-fill that slot (when empty) and mark it
+  // user-affirmed in the edited fieldConfidence, or the score never moves.
+  it("back-fills the empty linkedin_url slot from an added LinkedIn profile", () => {
+    const { parsed: out, fieldConfidence } = applyOverrides(
+      baseParsed(), // no legacy linkedin_url
+      "raw",
+      makeSections(),
+      {},
+      {},
+      {},
+      [],
+      {},
+      { removed: [], added: [] },
+      [],
+      {},
+      new Set(),
+      [
+        {
+          id: "profile:0",
+          url: "https://linkedin.com/in/jane",
+          network: "LinkedIn",
+          kind: "social",
+        },
+      ],
+    );
+    expect(out.linkedin_url).toBe("https://linkedin.com/in/jane");
+    expect(fieldConfidence.linkedin_url).toBe(1);
+  });
+
+  it("does NOT overwrite an existing legacy slot when back-filling", () => {
+    const { parsed: out } = applyOverrides(
+      parsedWithLinks(), // linkedin_url already set to .../in/jane
+      "raw",
+      makeSections(),
+      {},
+      {},
+      {},
+      [],
+      {},
+      { removed: [], added: [] },
+      [],
+      {},
+      new Set(),
+      [
+        {
+          id: "profile:0",
+          url: "https://linkedin.com/in/someone-else",
+          network: "LinkedIn",
+          kind: "social",
+        },
+      ],
+    );
+    expect(out.linkedin_url).toBe("https://linkedin.com/in/jane");
+  });
+
+  // #421 Blocking #3: a typed-in contact edit is user-affirmed → confidence 1;
+  // an explicit clear → 0; an untouched field keeps its base confidence.
+  it("bumps edited contact-field confidence and drops a cleared one", () => {
+    const { fieldConfidence } = applyOverrides(
+      baseParsed(),
+      "raw",
+      makeSections(),
+      { github_url: "https://github.com/jane", email: "" },
+      {},
+      {},
+      [],
+      {},
+      { removed: [], added: [] },
+      [],
+      {},
+      new Set(),
+      [],
+      { full_name: 0.9, email: 0.9 },
+    );
+    expect(fieldConfidence.github_url).toBe(1); // affirmed
+    expect(fieldConfidence.email).toBe(0); // cleared
+    expect(fieldConfidence.full_name).toBe(0.9); // untouched base kept
+  });
 });

@@ -91,6 +91,8 @@ export interface AtsEntryFields {
   /** JSON Resume `skills` — the flat skill list, carried only on the single
    *  skills entry (whose `headerLine` is the same list joined by " · "). */
   skills?: string[];
+  /** JSON Resume `awards.title` — carried on achievement entries (#421). */
+  title?: string;
 }
 
 export interface AtsEntry {
@@ -152,7 +154,7 @@ function resolveContactValue(
   return override; // "" clears, non-empty replaces
 }
 
-function buildContact(
+export function buildContact(
   result: CascadeResult,
   contactOverrides: ContactOverrides,
 ): AtsContact {
@@ -422,6 +424,12 @@ export function buildAtsResumeModel(
       bulletOverrides,
       ach.description,
     ),
+    // Structured source for the JSON Resume `awards[]` export (#421). Display
+    // code never reads `fields`; it renders `headerLine`/`bullets` above.
+    fields: {
+      ...(ach.title ? { title: ach.title } : {}),
+      ...(ach.year ? { startDate: ach.year } : {}),
+    },
   }));
 
   // ── Education ──

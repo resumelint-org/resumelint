@@ -52,8 +52,11 @@ export function ReportDownloadControl({
   );
 
   async function handleConfirm() {
-    await download({ format, includeIdentity });
-    setOpen(false);
+    // Close ONLY on success — a failed generation sets `error`, and closing
+    // here would unmount the dialog before the error line renders, leaving the
+    // user with no artifact and no message (#421 Blocking #4).
+    const ok = await download({ format, includeIdentity });
+    if (ok) setOpen(false);
   }
 
   return (

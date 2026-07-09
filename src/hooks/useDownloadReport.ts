@@ -27,13 +27,10 @@ import type { CascadeResult } from "../lib/heuristics/types.ts";
 import type { LayoutTrigger } from "../lib/heuristics/types.ts";
 import type { AnonymousAtsScore } from "../lib/score/score.ts";
 import { getScoreRecommendation } from "../lib/score/recommendation.ts";
-import { buildAtsResumeModel } from "../lib/pdf/ats-resume-model.ts";
-import { toJsonResume } from "../lib/pdf/to-json-resume.ts";
-import { renderAuditReportPdf } from "../lib/pdf/render-audit-report.ts";
-import {
-  serializeAuditReportJson,
-  type AuditReportInput,
-} from "../lib/report/serialize.ts";
+import { buildContact } from "../lib/pdf/ats-resume-model.ts";
+import { basicsFromContact } from "../lib/pdf/to-json-resume.ts";
+import { slugifyName, triggerBlobDownload } from "../lib/download/blob-download.ts";
+import type { AuditReportInput } from "../lib/report/serialize.ts";
 import type { EditableParse } from "./useEditableParse.ts";
 import { trackReportDownloaded, type ReportFormat } from "../lib/analytics.ts";
 
@@ -44,34 +41,13 @@ export interface DownloadReportOptions {
 }
 
 export interface UseDownloadReport {
-  download: (opts: DownloadReportOptions) => Promise<void>;
+  /** Generate + download the report. Resolves `true` on success, `false` when
+   *  generation failed (the error is surfaced via `error`) — the caller gates
+   *  closing the dialog on this so a failure doesn't unmount the error UI
+   *  (#421 Blocking #4). */
+  download: (opts: DownloadReportOptions) => Promise<boolean>;
   isGenerating: boolean;
   error: string | null;
-}
-
-/** Lower-kebab slug for the report filename; empty in → generic name. */
-function slugFromName(name: string | undefined): string {
-  return (name ?? "")
-    .normalize("NFKD")
-    .replace(/[^\w\s-]/g, "")
-    .trim()
-    .replace(/\s+/g, "-")
-    .toLowerCase();
-}
-
-/** Trigger a same-document download of `bytes` as `filename`. */
-function triggerDownload(bytes: BlobPart, mime: string, filename: string): void {
-  const blob = new Blob([bytes], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Defer revoke: a.click() only schedules the download; revoking synchronously
-  // can kill it on slower/remote contexts + Firefox/Safari (mirrors useDownloadPdf).
-  setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 export function useDownloadReport(
@@ -83,14 +59,16 @@ export function useDownloadReport(
   const [error, setError] = useState<string | null>(null);
 
   const download = useCallback(
-    async ({ format, includeIdentity }: DownloadReportOptions) => {
+    async ({ format, includeIdentity }: DownloadReportOptions): Promise<boolean> => {
       setIsGenerating(true);
       setError(null);
       try {
         // Identity is sourced ONLY when opted in — never build a basics block
         // we're about to strip (defense in depth alongside the serializer gate).
+        // Build it from the contact block directly (no full resume-model walk
+        // just to read `.basics`, #421 Secondary #6).
         const identity = includeIdentity
-          ? toJsonResume(buildAtsResumeModel(result, score, edit)).basics
+          ? basicsFromContact(buildContact(result, edit?.contactOverrides ?? {}))
           : undefined;
 
         const input: AuditReportInput = {
@@ -104,22 +82,33 @@ export function useDownloadReport(
 
         // Filename carries the name ONLY when identity is included — otherwise a
         // generic name so the download itself leaks nothing.
-        const slug = includeIdentity ? slugFromName(identity?.name) : "";
+        const slug = includeIdentity ? slugifyName(identity?.name) : "";
         const base = slug ? `${slug}-resume-audit-report` : "resume-audit-report";
 
+        // Lazy-load the renderer/serializer so the ~470 LOC audit-report path
+        // stays out of the entry chunk for the sessions that never click
+        // "Download report" (#421 Secondary #7, mirroring load-pdf-lib.ts).
         if (format === "pdf") {
+          const { renderAuditReportPdf } = await import(
+            "../lib/pdf/render-audit-report.ts"
+          );
           const bytes = await renderAuditReportPdf(input);
-          triggerDownload(bytes.slice(), "application/pdf", `${base}.pdf`);
+          triggerBlobDownload(bytes.slice(), "application/pdf", `${base}.pdf`);
         } else {
+          const { serializeAuditReportJson } = await import(
+            "../lib/report/serialize.ts"
+          );
           const json = serializeAuditReportJson(input);
-          triggerDownload(json, "application/json", `${base}.json`);
+          triggerBlobDownload(json, "application/json", `${base}.json`);
         }
 
         trackReportDownloaded({ format, includeIdentity });
+        return true;
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Could not generate report.",
         );
+        return false;
       } finally {
         setIsGenerating(false);
       }

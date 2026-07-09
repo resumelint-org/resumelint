@@ -21,15 +21,15 @@
  *
  * Section → JSON Resume array mapping (by `AtsSection.kind`):
  *   experience → `work[]`, projects → `projects[]`, education → `education[]`,
- *   skills → `skills[]`. `achievements` (a heuristic, untyped section) has no
- *   faithful JSON Resume home — mapping it to `awards`/`publications` would
- *   require inventing an awarder/type we don't have, so it is intentionally NOT
- *   emitted (the ATS-relevant surface — work/education/skills — is covered, and
- *   the achievements text still rides in the PDF's own text layer).
+ *   skills → `skills[]`, achievements → `awards[]` (title + optional date only;
+ *   we invent no awarder/summary — JSON Resume treats every award field
+ *   optional, so this is faithful, #421 review). `awards` is omitted entirely
+ *   when the résumé has no Achievements section.
  */
 
 import type {
   AtsResumeModel,
+  AtsContact,
   AtsEntryFields,
   AtsSectionKind,
 } from "./ats-resume-model.ts";
@@ -93,6 +93,13 @@ export interface JsonResumeProject {
   highlights?: string[];
 }
 
+export interface JsonResumeAward {
+  title?: string;
+  date?: string;
+  awarder?: string;
+  summary?: string;
+}
+
 export interface JsonResumeMeta {
   /** Producing app build id (`APP_VERSION`) — provenance, not the schema rev. */
   version?: string;
@@ -105,6 +112,10 @@ export interface JsonResume {
   education: JsonResumeEducation[];
   skills: JsonResumeSkill[];
   projects: JsonResumeProject[];
+  /** Present only when the résumé carries an Achievements section — omitted
+   *  otherwise so a résumé without one stays byte-identical to the pre-#421
+   *  export (no empty `awards: []` churn). */
+  awards?: JsonResumeAward[];
   meta: JsonResumeMeta;
 }
 
@@ -197,15 +208,12 @@ export function toJsonResumeLocation(
 /** Last non-empty path segment of a URL, case-preserved — the JSON Resume
  *  `profile.username` (e.g. `linkedin.com/in/jane` → "jane",
  *  `github.com/JaneSmith` → "JaneSmith"). `undefined` when the URL has no path.
- *  `url` is already normalized (scheme present) by `classifyProfile`, so `new
- *  URL` parses it; a parse failure yields no username rather than throwing. */
+ *  `url` is already normalized (scheme present) AND round-tripped through `new
+ *  URL(...)` inside `classifyProfile` before it reaches here, so parsing can't
+ *  fail — no defensive catch (#421 review, nit 14). */
 function usernameFromUrl(url: string): string | undefined {
-  try {
-    const segments = new URL(url).pathname.split("/").filter(Boolean);
-    return segments.length > 0 ? segments[segments.length - 1] : undefined;
-  } catch {
-    return undefined;
-  }
+  const segments = new URL(url).pathname.split("/").filter(Boolean);
+  return segments.length > 0 ? segments[segments.length - 1] : undefined;
 }
 
 /** JSON Resume `basics.url`: the candidate's own site — the first `portfolio`
@@ -218,8 +226,13 @@ function pickPrimaryUrl(profiles: readonly ProfileLink[]): string | undefined {
   );
 }
 
-function toBasics(model: AtsResumeModel): JsonResumeBasics {
-  const c = model.contact;
+/**
+ * Build JSON Resume `basics` from an {@link AtsContact} alone — no section
+ * walk. Exported so the audit-report identity header can source basics without
+ * running the full `buildAtsResumeModel` + `toJsonResume` pipeline just to read
+ * `.basics` off the result (#421 review, Secondary #6).
+ */
+export function basicsFromContact(c: AtsContact): JsonResumeBasics {
   const sourceProfiles = c.profiles ?? [];
   const profiles: JsonResumeProfile[] = sourceProfiles.map((p) => {
     const username = usernameFromUrl(p.url);
@@ -233,6 +246,10 @@ function toBasics(model: AtsResumeModel): JsonResumeBasics {
     location: toJsonResumeLocation(c.location),
     profiles: profiles.length > 0 ? profiles : undefined,
   };
+}
+
+function toBasics(model: AtsResumeModel): JsonResumeBasics {
+  return basicsFromContact(model.contact);
 }
 
 // ── section → array mappers ────────────────────────────────────────────────────
@@ -265,6 +282,17 @@ function toProject(
   };
 }
 
+/** Achievements → JSON Resume `awards`. JSON Resume treats every award field
+ *  optional, so emitting `{ title, date? }` from what we actually have (title +
+ *  the year) is faithful, not fabricated — we invent no awarder/summary (#421
+ *  review, Secondary #12). */
+function toAward(fields: AtsEntryFields): JsonResumeAward {
+  return {
+    title: fields.title,
+    date: normalizeJsonResumeDate(fields.startDate),
+  };
+}
+
 function toEducation(fields: AtsEntryFields): JsonResumeEducation {
   return {
     institution: fields.organization,
@@ -284,6 +312,7 @@ interface ResumeBuckets {
   education: JsonResumeEducation[];
   skills: JsonResumeSkill[];
   projects: JsonResumeProject[];
+  awards: JsonResumeAward[];
 }
 
 /**
@@ -311,6 +340,9 @@ function appendEntry(
     case "skills":
       for (const name of fields?.skills ?? []) buckets.skills.push({ name });
       break;
+    case "achievements":
+      if (fields) buckets.awards.push(toAward(fields));
+      break;
     default:
       break;
   }
@@ -324,7 +356,13 @@ function appendEntry(
  * for that array (it carries nothing to map).
  */
 export function toJsonResume(model: AtsResumeModel): JsonResume {
-  const buckets: ResumeBuckets = { work: [], education: [], skills: [], projects: [] };
+  const buckets: ResumeBuckets = {
+    work: [],
+    education: [],
+    skills: [],
+    projects: [],
+    awards: [],
+  };
 
   for (const section of model.sections) {
     for (const entry of section.entries) {
@@ -339,6 +377,9 @@ export function toJsonResume(model: AtsResumeModel): JsonResume {
     education: buckets.education,
     skills: buckets.skills,
     projects: buckets.projects,
+    // Omit `awards` entirely when there are none, keeping the achievement-free
+    // export byte-identical to before (#421 review, Secondary #12).
+    ...(buckets.awards.length > 0 ? { awards: buckets.awards } : {}),
     meta: { version: APP_VERSION },
   };
 }

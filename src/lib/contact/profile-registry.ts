@@ -31,6 +31,13 @@ interface HostRule {
   /** Human-facing network label shown in the UI. */
   network: string;
   kind: ProfileLink["kind"];
+  /** Paths on this host that are NOT a personal identity profile (e.g. a
+   *  LinkedIn company/jobs/feed page, a GitHub org page). Tested against the
+   *  full URL; a match keeps the link but downgrades it to a generic `other`
+   *  link on the bare host — never the network's `social`/`code`/… kind. Keeps
+   *  the per-host exclusion inside the `HostRule` shape instead of accreting a
+   *  special case in the classify loop (#421 review, nit 17). */
+  nonProfilePath?: RegExp;
   /** UI-only guided-add hint. When set, this host surfaces as a quick-pick chip
    *  in the profile-add affordance (`PROFILE_QUICK_PICKS`): tapping the chip
    *  pre-fills `prefix` and the caret lands after it so the user types only
@@ -50,6 +57,7 @@ export const PROFILE_HOSTS: readonly HostRule[] = [
     match: /(^|\.)linkedin\.com$/i,
     network: "LinkedIn",
     kind: "social",
+    nonProfilePath: LINKEDIN_NONPROFILE_RE,
     quickPick: { prefix: "https://linkedin.com/in/", hint: "your-handle" },
   },
   {
@@ -141,17 +149,15 @@ export function classifyProfile(rawUrl: string): ProfileLink | undefined {
   }
   if (hostname.length === 0) return undefined;
 
-  // A LinkedIn URL that is a feed/company/jobs/… page is not a personal
-  // identity profile — keep it, but do not label it `social`.
-  const isLinkedinHost = /(^|\.)linkedin\.com$/i.test(hostname);
-  if (isLinkedinHost && LINKEDIN_NONPROFILE_RE.test(url)) {
-    return { url, network: hostname, kind: "other" };
-  }
-
   for (const rule of PROFILE_HOSTS) {
-    if (rule.match.test(hostname)) {
-      return { url, network: rule.network, kind: rule.kind };
+    if (!rule.match.test(hostname)) continue;
+    // A non-profile path on this host (e.g. a LinkedIn feed/company/jobs page)
+    // is kept but downgraded to a generic `other` link on the bare host — never
+    // the network's identity kind.
+    if (rule.nonProfilePath?.test(url)) {
+      return { url, network: hostname, kind: "other" };
     }
+    return { url, network: rule.network, kind: rule.kind };
   }
   return { url, network: hostname, kind: "other" };
 }

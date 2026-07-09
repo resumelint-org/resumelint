@@ -232,20 +232,37 @@ describe("toJsonResume — never fabricates data", () => {
     expect(doc.basics.location).toBeUndefined();
   });
 
-  it("does not map the achievements section to any JSON Resume array", () => {
+  // #421 Secondary #12: achievements map to JSON Resume `awards[]` (title +
+  // optional date), so the machine-readable copy no longer silently drops the
+  // candidate's patents/publications/exits that the text layer still shows.
+  it("maps achievement entries (with structured fields) to awards[]", () => {
     const doc = toJsonResume({
       contact: { name: "X", links: [] },
       sections: [
         {
           heading: "Achievements",
           kind: "achievements",
-          entries: [{ headerLine: "Won an award", bullets: [] }],
+          entries: [
+            {
+              headerLine: "Patent US1234 · 2021",
+              bullets: [],
+              fields: { title: "Patent US1234", startDate: "2021" },
+            },
+          ],
         },
       ],
     });
+    expect(doc.awards).toEqual([{ title: "Patent US1234", date: "2021" }]);
+    // Still nothing in the ATS-core arrays.
     expect(doc.work).toEqual([]);
     expect(doc.projects).toEqual([]);
     expect(doc.education).toEqual([]);
+  });
+
+  it("omits awards entirely when there is no achievements section", () => {
+    const doc = toJsonResume({ contact: { name: "X", links: [] }, sections: [] });
+    expect(doc.awards).toBeUndefined();
+    expect("awards" in doc).toBe(false);
   });
 });
 

@@ -27,6 +27,7 @@
 import { loadPdfLibOnce, type PdfLibParts } from "./load-pdf-lib.ts";
 import type { AtsResumeModel, AtsEntry } from "./ats-resume-model.ts";
 import { toJsonResume } from "./to-json-resume.ts";
+import { wrapWordsToLines } from "./text-wrap.ts";
 import poppinsRegularUrl from "../../assets/fonts/Poppins-Regular.ttf?url";
 import poppinsBoldUrl from "../../assets/fonts/Poppins-Bold.ttf?url";
 
@@ -281,33 +282,6 @@ async function loadFonts(
   const regular = await doc.embedFont(parts.StandardFonts.Helvetica);
   const bold = await doc.embedFont(parts.StandardFonts.HelveticaBold);
   return { regular, bold, isEmbedded: false };
-}
-
-/**
- * Plain `\s+`-word wrap — never breaks a word apart, just packs words up to
- * `maxWidth`. A single word wider than `maxWidth` is emitted as its own line
- * (never split mid-word), so this always terminates.
- */
-function wrapWordsToLines(
-  words: string[],
-  font: PdfFont,
-  size: number,
-  maxWidth: number,
-): string[] {
-  if (words.length === 0) return [];
-  const lines: string[] = [];
-  let current = words[0];
-  for (let i = 1; i < words.length; i++) {
-    const candidate = `${current} ${words[i]}`;
-    if (font.widthOfTextAtSize(candidate, size) <= maxWidth) {
-      current = candidate;
-    } else {
-      lines.push(current);
-      current = words[i];
-    }
-  }
-  lines.push(current);
-  return lines;
 }
 
 /**
