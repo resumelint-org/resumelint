@@ -619,3 +619,98 @@ describe("education — adjacent identical-degree headers, distinct schools (#29
     expect(value.map((e) => e.degree)).toEqual(["B.S.", "B.S."]);
   });
 });
+
+// PR #417 review — targeted regressions surfaced during the reviewer's pass
+// on the batch fixes. Each `it` names the specific reviewer input so the
+// intent survives if the shape ever moves.
+describe("extractEducation — PR #417 review inputs", () => {
+  // #366: a `<Institution> of <City>, ST` construction ("University of Miami,
+  // FL") looks like a state-suffixed institution NAME, not institution + city
+  // + state — the 1-space fallback used to strand the institution as
+  // "University of" and treat the city as location. Reject when the surviving
+  // institution prefix ends in a preposition/article.
+  it("refuses to split 'University of Miami, FL' (prefix ends in a preposition)", () => {
+    const { value } = extractEducation(
+      mkEduSection([
+        "University of Miami, FL",
+        "B.S. in Computer Science, 2018 - 2022",
+      ]),
+    );
+    expect(value[0].institution).toBe("University of Miami, FL");
+    expect(value[0].location).toBeUndefined();
+  });
+
+  it("refuses to split 'University of Michigan, MI'", () => {
+    const { value } = extractEducation(
+      mkEduSection([
+        "University of Michigan, MI",
+        "B.S. in Computer Science, 2018 - 2022",
+      ]),
+    );
+    expect(value[0].institution).toBe("University of Michigan, MI");
+    expect(value[0].location).toBeUndefined();
+  });
+
+  // #371: legitimate Commonwealth degree shapes carry `Honours` / `Thesis` on
+  // the SAME line as the credential + real attendance dates. The annotation
+  // filter used to drop the whole line and lose the dates; the DEGREE_RE
+  // carve-out keeps any line that also matches a degree.
+  it("keeps attendance dates on an 'Honours Bachelor of Science, 2015 - 2019' line", () => {
+    const { value } = extractEducation(
+      mkEduSection([
+        "University of Toronto",
+        "Honours Bachelor of Science, 2015 - 2019",
+      ]),
+    );
+    expect(value[0].start_date).toBe("2015");
+    expect(value[0].end_date).toBe("2019");
+  });
+
+  it("keeps attendance dates on a 'Thesis-based M.Sc. Data Science, 2018 - 2020' line", () => {
+    const { value } = extractEducation(
+      mkEduSection([
+        "McGill University",
+        "Thesis-based M.Sc. Data Science, 2018 - 2020",
+      ]),
+    );
+    expect(value[0].start_date).toBe("2018");
+    expect(value[0].end_date).toBe("2020");
+  });
+
+  // #364: a spaced ASCII `-` commonly separates degree from field ("B.S. -
+  // Computer Science"), not institution from the rest, so the em-dash split
+  // must not fire on it — otherwise the field ends up glued to the institution.
+  it("does not split 'B.S. - Computer Science, Stanford University' at the ASCII hyphen", () => {
+    const { value } = extractEducation(
+      mkEduSection(["B.S. - Computer Science, Stanford University"]),
+    );
+    expect(value[0].degree).toBe("B.S.");
+    // Field is recovered (was `undefined` in the pre-fix regression, because
+    // the ASCII-hyphen split reassigned the credential's tail to institution
+    // and left field empty). Disambiguating a comma-separated
+    // "<field>, <institution>" is a separate split not in scope for #364; the
+    // guarantee here is that the credential's tail is no longer lost.
+    expect(value[0].field).toMatch(/Computer Science/);
+    // Institution still contains the trailing institution token; the raw
+    // whole-line fallback is unchanged for the no-em-dash shape.
+    expect(value[0].institution).toMatch(/Stanford/);
+  });
+
+  // #367: the per-item Title-case guard used to silently drop a mid-list
+  // lowercase course. Whole-bullet semantics restore that: check the FIRST
+  // item; if it clears the guard, keep all its comma-separated siblings.
+  it("keeps a mid-list lowercase course when the first item is Title-case", () => {
+    const { value } = extractEducation(
+      mkEduSection([
+        "State University",
+        "B.S. Computer Science, 2020 - 2024",
+        "● Coursework: Data Structures, algorithms, Operating Systems",
+      ]),
+    );
+    expect(value[0].coursework).toEqual([
+      "Data Structures",
+      "algorithms",
+      "Operating Systems",
+    ]);
+  });
+});

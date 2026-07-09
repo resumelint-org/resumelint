@@ -150,9 +150,16 @@ const EDUCATION_ANNOTATION_RE =
  *  the annotation range (2015–2017) win over the real graduation year (2017)
  *  on a sibling line. Line-level filter — an annotation phrase inline with a
  *  real date on the SAME line is rare in practice; keeping the whole line
- *  when it doesn't lead with an annotation is safer than mid-line surgery. */
+ *  when it doesn't lead with an annotation is safer than mid-line surgery.
+ *
+ *  DEGREE-carve-out: a line that ALSO matches {@link DEGREE_RE} carries the
+ *  real attendance / graduation date and stays regardless of which annotation
+ *  keywords it contains. Commonwealth shapes like "Honours Bachelor of Science,
+ *  2015 - 2019" or "Thesis-based M.Sc. Data Science, 2018 - 2020" mention
+ *  `honours` / `thesis` on the SAME line as the degree + real dates; filtering
+ *  the whole line would drop both. */
 function filterAnnotationLinesForDates(lines: readonly string[]): string[] {
-  return lines.filter((l) => !EDUCATION_ANNOTATION_RE.test(l));
+  return lines.filter((l) => DEGREE_RE.test(l) || !EDUCATION_ANNOTATION_RE.test(l));
 }
 
 /** Source-side coursework label to peel off the bullet residue before the
@@ -490,12 +497,19 @@ function stripInstitutionLocation(s: string): {
     /\s*·\s*([A-Z][A-Za-z.\-]+(?:\s+[A-Z][A-Za-z.\-]+)*),\s*([A-Z]{2})$/;
   // #366 — 1-space fallback for LaTeX two-column line assembly, which joins
   // institution and city with only ONE space ("Lakeside Institute of Technology
-  // Seattle, WA"). Only fires when the surviving institution prefix has ≥2
-  // tokens: a single-token remainder ("Stanford CA", "MIT Cambridge, MA") is
-  // ambiguous with a real institution + state suffix, so we refuse to split
-  // there and keep the whole line as institution. Tried AFTER the 2+ space
-  // primary so "… University  City, ST" still matches the strict shape.
+  // Seattle, WA"). Fires only when the surviving institution prefix has ≥2
+  // tokens AND its last token is not a preposition/article — a `\s+of\s+City,
+  // ST` construction ("University of Miami, FL", "University of Michigan, MI")
+  // is a state-suffixed institution NAME, not an institution + city + state,
+  // so a prefix ending in `of`/`the`/… is the tell that the split misfired.
+  // Single-word remainders ("Cornell Ithaca, NY", "MIT Cambridge, MA") are
+  // ambiguous with a state-suffixed institution and stay glued too. Tried
+  // AFTER the 2+ space primary so "… University  City, ST" still matches the
+  // strict shape.
   const SPACE1_US_RE = /\s([A-Z][A-Za-z.\-]+),\s*([A-Z]{2})$/;
+  // Lowercase words that must not sit at the tail of an institution prefix.
+  // Case-insensitive because a title-cased "Of"/"The" is the same tell.
+  const INST_PREFIX_STOP_TAIL = /^(?:of|the|a|an|and|for|in|on|at|to)$/i;
   let mUS =
     s.match(COMMA_US_RE) ?? s.match(SPACE_US_RE) ?? s.match(MIDDOT_US_RE);
   if (!mUS) {
@@ -506,7 +520,10 @@ function stripInstitutionLocation(s: string): {
         .trim()
         .split(/\s+/)
         .filter((t) => t.length > 0);
-      if (beforeTokens.length >= 2) mUS = m1;
+      const lastToken = beforeTokens[beforeTokens.length - 1] ?? "";
+      const guarded =
+        beforeTokens.length >= 2 && !INST_PREFIX_STOP_TAIL.test(lastToken);
+      if (guarded) mUS = m1;
     }
   }
   if (mUS && US_STATE_CODE_RE.test(mUS[2])) {
@@ -639,7 +656,11 @@ function educationFromChunk(chunk: string[]): {
       // reconstructed view. Split at the em/en-dash separator so the trailing
       // half is the institution and re-parse degree/field off the head.
       if (instLine === degreeLine && degreeMatch) {
-        const parts = instLine.split(/\s+[–—-]\s+/);
+        // En/em-dash only — a spaced ASCII `-` commonly separates degree from
+        // field ("B.S. - Computer Science, Stanford University"), not
+        // institution from the rest, so splitting on it here would strand the
+        // field on the wrong side of the boundary.
+        const parts = instLine.split(/\s+[–—]\s+/);
         if (parts.length >= 2) {
           // Pick the part carrying an institution hint ("University", "College",
           // …) as the institution. If none carries a hint, fall back to the
@@ -767,16 +788,17 @@ export function extractEducation(
     item = item.replace(COURSEWORK_LABEL_RE, "").trim();
     // Split a comma-separated course list into individual entries so each
     // course is addressable in the reconstructed view (#367). A single-course
-    // bullet with no comma remains one entry. Filter empties (a trailing
-    // comma) and drop items that fail the Title-case guard so a lowercase
-    // prose bullet ("- including courses taught in Japanese") is still
-    // dropped as before.
+    // bullet with no comma remains one entry. The Title-case guard runs on
+    // the FIRST item only (matching pre-split whole-bullet semantics): a
+    // lowercase prose bullet ("- including courses taught in Japanese") is
+    // dropped as before, but a mid-list lowercase course
+    // ("Coursework: Data Structures, algorithms, Operating Systems") is kept
+    // alongside its Title-case siblings rather than silently dropped.
     const items = item.includes(",")
       ? item.split(/\s*,\s*/).filter((t) => t.length > 0)
       : [item];
-    const kept = items.filter((t) => /^[A-Z0-9]/.test(t));
-    if (kept.length > 0) {
-      for (const c of kept) coursework.push({ text: c, idx: i });
+    if (items.length > 0 && /^[A-Z0-9]/.test(items[0])) {
+      for (const c of items) coursework.push({ text: c, idx: i });
       for (const k of span) consumed.add(k);
     }
     i = j - 1;
