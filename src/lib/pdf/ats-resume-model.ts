@@ -200,10 +200,13 @@ export function buildContact(
   const phone = valueFor("phone");
   const location = valueFor("location");
 
-  // Links: LinkedIn comes from the editable/contact path; the remaining link
-  // fields are read straight off the parsed resume (they're not edited inline).
-  // Each is scheme-stripped for display via `stripLinkScheme` (#425) —
-  // `https://www.linkedin.com/in/jane` → `www.linkedin.com/in/jane`.
+  // Links: since #427 every link edit (including LinkedIn corrections) folds
+  // into the parsed slots via `profileOverrides`, so `result.parsed` already
+  // carries the edited values. LinkedIn keeps its confidence gating via the
+  // display field (unchanged behavior); the remaining link fields are read
+  // straight off the parsed resume. Each is scheme-stripped for display via
+  // `stripLinkScheme` (#425) — `https://www.linkedin.com/in/jane` →
+  // `www.linkedin.com/in/jane`.
   //
   // NOTE: unlike the contact-card's `formatLinkDisplay`, this KEEPS a leading
   // `www.`. Stripping `www.` breaks the round-trip: the parser re-adds a
@@ -214,7 +217,9 @@ export function buildContact(
   // follow-up. The helper is idempotent, so an already-stripped value passes
   // through unchanged.
   const links: string[] = [];
-  const linkedin = valueFor("linkedin_url");
+  const linkedinField = byKey.get("linkedin_url");
+  const linkedin =
+    linkedinField && !linkedinField.gated ? linkedinField.value.trim() : "";
   if (linkedin) links.push(stripLinkScheme(linkedin));
   const parsed = result.parsed;
   if (parsed.github_url) links.push(stripLinkScheme(parsed.github_url));

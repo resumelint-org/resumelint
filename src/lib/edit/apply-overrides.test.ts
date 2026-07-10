@@ -2,7 +2,8 @@
 // Copyright 2026 The resumelint Authors
 
 import { describe, it, expect } from "vitest";
-import { applyOverrides } from "./apply-overrides.ts";
+import { applyOverrides, applyProfileOverrides } from "./apply-overrides.ts";
+import type { LegacyLinkFields } from "./apply-overrides.ts";
 import { computeAnonymousAtsScore } from "../score/score.ts";
 import { groupBulletsByExperience } from "../score/group-bullets.ts";
 import type { HeuristicParsedResume } from "../heuristics/types.ts";
@@ -825,15 +826,29 @@ describe("applyOverrides — profiles[] (#335)", () => {
     expect(out.profiles).toBeUndefined();
   });
 
-  it("re-mirrors profiles from a legacy link edit (never desyncs)", () => {
+  it("re-mirrors profiles from a legacy link correction (never desyncs)", () => {
     const { parsed: out } = applyOverrides(
       baseParsed(),
       "raw",
       makeSections(),
-      { linkedin_url: "https://linkedin.com/in/corrected" },
+      {},
       {},
       {},
       [],
+      {},
+      { removed: [], added: [] },
+      [],
+      {},
+      new Set(),
+      [
+        {
+          id: "profile:0",
+          url: "https://linkedin.com/in/corrected",
+          network: "LinkedIn",
+          kind: "social",
+          legacyKey: "linkedin_url",
+        },
+      ],
     );
     expect(out.linkedin_url).toBe("https://linkedin.com/in/corrected");
     expect(out.profiles).toEqual([
@@ -850,10 +865,25 @@ describe("applyOverrides — profiles[] (#335)", () => {
       parsedWithLinks(),
       "raw",
       makeSections(),
-      { linkedin_url: "" }, // clear LinkedIn; GitHub stays
+      {},
       {},
       {},
       [],
+      {},
+      { removed: [], added: [] },
+      [],
+      {},
+      new Set(),
+      [
+        // Clear LinkedIn (empty url correction); GitHub stays.
+        {
+          id: "profile:0",
+          url: "",
+          network: "linkedin_url",
+          kind: "other",
+          legacyKey: "linkedin_url",
+        },
+      ],
     );
     expect(out.linkedin_url).toBeUndefined();
     expect(out.profiles).toEqual([
@@ -940,10 +970,24 @@ describe("applyOverrides — profiles[] (#335)", () => {
       parsed,
       "raw",
       makeSections(),
-      { linkedin_url: "https://linkedin.com/in/moved" },
+      {},
       {},
       {},
       [],
+      {},
+      { removed: [], added: [] },
+      [],
+      {},
+      new Set(),
+      [
+        {
+          id: "profile:0",
+          url: "https://linkedin.com/in/moved",
+          network: "LinkedIn",
+          kind: "social",
+          legacyKey: "linkedin_url",
+        },
+      ],
     );
     expect(parsed).toEqual(snapshot);
   });
@@ -1012,7 +1056,7 @@ describe("applyOverrides — profiles[] (#335)", () => {
       baseParsed(),
       "raw",
       makeSections(),
-      { github_url: "https://github.com/jane", email: "" },
+      { email: "" }, // clear email (non-link contact field)
       {},
       {},
       [],
@@ -1021,11 +1065,40 @@ describe("applyOverrides — profiles[] (#335)", () => {
       [],
       {},
       new Set(),
-      [],
+      [
+        // GitHub correction (a link edit) — affirmed → confidence 1.
+        {
+          id: "profile:0",
+          url: "https://github.com/jane",
+          network: "GitHub",
+          kind: "code",
+          legacyKey: "github_url",
+        },
+      ],
       { full_name: 0.9, email: 0.9 },
     );
     expect(fieldConfidence.github_url).toBe(1); // affirmed
     expect(fieldConfidence.email).toBe(0); // cleared
     expect(fieldConfidence.full_name).toBe(0.9); // untouched base kept
+  });
+
+  // #427 review Secondary #1: a correction that CLEARS a legacy slot plus an
+  // extra that back-fills the SAME slot must collapse to ONE confEdit (the
+  // extra's confidence 1) — not two. A downstream consumer reads the returned
+  // list via `.find(e => e.key === …)`, which returns the FIRST match; a
+  // duplicate {conf:0} before {conf:1} would make it read the link as absent
+  // while the slot is present, desyncing score from display.
+  it("returns one confEdit per legacy slot (clear + same-slot add → last wins)", () => {
+    const probe: LegacyLinkFields = { linkedin_url: "https://linkedin.com/in/old" };
+    const confEdits = applyProfileOverrides(probe, [
+      // correction: clear the detected LinkedIn
+      { id: "p0", url: "", network: "LinkedIn", kind: "social", legacyKey: "linkedin_url" },
+      // extra: add a new LinkedIn (no legacyKey) → back-fills the now-empty slot
+      { id: "p1", url: "https://linkedin.com/in/new", network: "LinkedIn", kind: "social" },
+    ]);
+    const linkedinEdits = confEdits.filter((e) => e.key === "linkedin_url");
+    expect(linkedinEdits).toHaveLength(1);
+    expect(linkedinEdits[0].confidence).toBe(1); // present, not the stale clear
+    expect(probe.linkedin_url).toBe("https://linkedin.com/in/new");
   });
 });
