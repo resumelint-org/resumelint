@@ -230,10 +230,13 @@ export function buildContact(
   const phone = valueFor("phone");
   const location = valueFor("location");
 
-  // Links: LinkedIn comes from the editable/contact path; the remaining link
-  // fields are read straight off the parsed resume (they're not edited inline).
-  // Each is fully display-formatted via `formatLinkDisplay` (#425) — scheme,
-  // a leading `www.`, and any trailing slash dropped:
+  // Links: since #427 every link edit (including LinkedIn corrections) folds
+  // into the parsed slots via `profileOverrides`, so `result.parsed` already
+  // carries the edited values. LinkedIn keeps its confidence gating via the
+  // display field (read straight off the gated field, not the override path);
+  // the remaining link fields are read straight off the parsed resume. Each is
+  // fully display-formatted via `formatLinkDisplay` (#425) — scheme, a leading
+  // `www.`, and any trailing slash dropped:
   // `https://www.linkedin.com/in/jane` → `linkedin.com/in/jane`.
   //
   // Full `www.` stripping now round-trips: the parser's `normalizeUrl`
@@ -255,7 +258,9 @@ export function buildContact(
     links.push(formatLinkDisplay(url));
     linkHrefs.push(ensureScheme(url));
   };
-  const linkedin = valueFor("linkedin_url");
+  const linkedinField = byKey.get("linkedin_url");
+  const linkedin =
+    linkedinField && !linkedinField.gated ? linkedinField.value.trim() : "";
   if (linkedin) addLink(linkedin);
   const parsed = result.parsed;
   if (parsed.github_url) addLink(parsed.github_url);
