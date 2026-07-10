@@ -168,36 +168,15 @@ export function applyProfileOverrides(
   nextParsed: LegacyLinkFields,
   profileOverrides: readonly ProfileOverride[],
 ): LegacyConfEdit[] {
-  const confEdits: LegacyConfEdit[] = [];
-
-  // 1. Corrections — replace/clear the targeted legacy slot, confidence → 1/0.
-  for (const ov of profileOverrides) {
-    if (ov.legacyKey === undefined) continue;
-    if (ov.url.trim() === "") {
-      delete nextParsed[ov.legacyKey];
-      confEdits.push({ key: ov.legacyKey, confidence: 0 });
-    } else {
-      // Store the classified (normalized) URL when parseable, else the raw edit
-      // — mirrors the old per-slot override storing the user's value.
-      nextParsed[ov.legacyKey] = classifyProfile(ov.url)?.url ?? ov.url;
-      confEdits.push({ key: ov.legacyKey, confidence: 1 });
-    }
-  }
-
-  // 2. Extras — back-fill an EMPTY linkedin/github slot from a matching added
-  //    link (only when empty), so the add moves the score + clears the gap.
   const extras = profileOverrides.filter((p) => p.legacyKey === undefined);
-  for (const extra of extras) {
-    const classified = classifyProfile(extra.url);
-    if (!classified) continue;
-    const legacyKey = NETWORK_TO_LEGACY_KEY[classified.network];
-    if (legacyKey && !nextParsed[legacyKey]) {
-      nextParsed[legacyKey] = classified.url;
-      confEdits.push({ key: legacyKey, confidence: 1 });
-    }
-  }
+  // Step order matters: corrections lead, extra back-fills follow, so a later
+  // back-fill's confidence wins the dedup on a slot a correction just cleared.
+  const confEdits = [
+    ...applyLinkCorrections(nextParsed, profileOverrides),
+    ...backfillLegacyFromExtras(nextParsed, extras),
+  ];
 
-  // 3. Re-derive the profiles mirror from the edited legacy slots + extras.
+  // Re-derive the profiles mirror from the edited legacy slots + extras.
   const profiles = profilesFromUrls([
     nextParsed.linkedin_url,
     nextParsed.github_url,
@@ -211,12 +190,60 @@ export function applyProfileOverrides(
   if (profiles.length > 0) nextParsed.profiles = profiles;
   else delete nextParsed.profiles;
 
-  // A correction (step 1) and an extra back-fill (step 2) can target the SAME
-  // legacy slot — e.g. the user clears a detected LinkedIn (correction → conf 0)
-  // then adds one via + Add (extra → conf 1). Collapse to one entry per key,
-  // last-write-wins (which matches step order: the extra's confidence is what
-  // the slot actually ends up at), so a downstream `.find(e => e.key === …)`
-  // can't read the stale earlier confidence and treat a present link as absent.
+  return dedupeConfEdits(confEdits);
+}
+
+/** Corrections (`legacyKey` set) — replace/clear the targeted legacy slot,
+ *  confidence → 1 (or 0 on clear). Mutates `nextParsed`. */
+function applyLinkCorrections(
+  nextParsed: LegacyLinkFields,
+  profileOverrides: readonly ProfileOverride[],
+): LegacyConfEdit[] {
+  const confEdits: LegacyConfEdit[] = [];
+  for (const ov of profileOverrides) {
+    if (ov.legacyKey === undefined) continue;
+    if (ov.url.trim() === "") {
+      delete nextParsed[ov.legacyKey];
+      confEdits.push({ key: ov.legacyKey, confidence: 0 });
+    } else {
+      // Store the classified (normalized) URL when parseable, else the raw edit
+      // — mirrors the old per-slot override storing the user's value.
+      nextParsed[ov.legacyKey] = classifyProfile(ov.url)?.url ?? ov.url;
+      confEdits.push({ key: ov.legacyKey, confidence: 1 });
+    }
+  }
+  return confEdits;
+}
+
+/** Extras (no `legacyKey`) — back-fill an EMPTY linkedin/github slot from a
+ *  matching added link (only when empty), so the add moves the score + clears
+ *  the gap. Mutates `nextParsed`. */
+function backfillLegacyFromExtras(
+  nextParsed: LegacyLinkFields,
+  extras: readonly ProfileOverride[],
+): LegacyConfEdit[] {
+  const confEdits: LegacyConfEdit[] = [];
+  for (const extra of extras) {
+    const classified = classifyProfile(extra.url);
+    if (!classified) continue;
+    const legacyKey = NETWORK_TO_LEGACY_KEY[classified.network];
+    if (legacyKey && !nextParsed[legacyKey]) {
+      nextParsed[legacyKey] = classified.url;
+      confEdits.push({ key: legacyKey, confidence: 1 });
+    }
+  }
+  return confEdits;
+}
+
+/**
+ * Collapse to one entry per legacy key, last-write-wins. A correction and an
+ * extra back-fill can target the SAME slot — e.g. the user clears a detected
+ * LinkedIn (correction → conf 0) then adds one via + Add (extra → conf 1).
+ * Keeping both would let a downstream `.find(e => e.key === …)` read the stale
+ * earlier confidence and treat a present link as absent; last-write-wins keeps
+ * the confidence the slot actually ends up at (the extra's).
+ */
+function dedupeConfEdits(confEdits: readonly LegacyConfEdit[]): LegacyConfEdit[] {
   const byKey = new Map<LegacyLinkKey, LegacyConfEdit>();
   for (const edit of confEdits) byKey.set(edit.key, edit);
   return [...byKey.values()];
