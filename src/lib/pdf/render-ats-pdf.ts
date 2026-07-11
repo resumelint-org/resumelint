@@ -421,6 +421,9 @@ class Layout {
     private fonts: { regular: PdfFont; bold: PdfFont },
     private black: RGB,
     private gray: RGB,
+    // Literal-string constructor from pdf-lib, used to build Link-annotation
+    // `/URI` values (#425 — see `registerLink`).
+    private pdfString: PdfLibParts["PDFString"],
     // When true (the default — the Helvetica fallback), every string is run
     // through `toWinAnsi()` before drawing, since StandardFonts can only
     // encode WinAnsi (#295). When false (a custom font — Poppins — embedded
@@ -436,6 +439,34 @@ class Layout {
   private newPage() {
     this.page = this.doc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
     this.y = PAGE_HEIGHT - MARGIN;
+  }
+
+  /**
+   * Register a clickable URI link annotation over the rect `[x0,y0,x1,y1]` (all
+   * in pdf-lib's bottom-origin page space, matching `this.y`) on the current
+   * page (#425). The annotation lives in the page's `/Annots` array — OUTSIDE
+   * the content stream — so it adds a clickable overlay without changing a
+   * single drawn glyph: `pdftotext` / pdfjs text extraction is untouched and the
+   * parse→export→re-parse text round-trip stays byte-for-byte identical.
+   * `context.obj` coerces a JS string to a `/Name`, so the URI is wrapped in an
+   * explicit `PDFString`; `Border [0 0 0]` suppresses the legacy visible box.
+   */
+  private registerLink(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    url: string,
+  ) {
+    const context = this.doc.context;
+    const annot = context.obj({
+      Type: "Annot",
+      Subtype: "Link",
+      Rect: [x0, y0, x1, y1],
+      Border: [0, 0, 0],
+      A: context.obj({ Type: "Action", S: "URI", URI: this.pdfString.of(url) }),
+    });
+    this.page.node.addAnnot(context.register(annot));
   }
 
   /** Ensure room for `height` pt; add a page if the cursor would overflow. */
@@ -511,6 +542,17 @@ class Layout {
       hangingIndent?: number;
       uppercase?: boolean;
       atomicSegments?: boolean;
+      /** A short tail (a role/degree date range) drawn FLUSH-RIGHT, regular
+       *  weight, on the first wrapped line's baseline (#425). */
+      rightText?: string;
+      rightColor?: RGB;
+      rightSize?: number;
+      /** Register a clickable URI annotation over the whole first line (#425). */
+      linkUrl?: string;
+      /** Register a clickable URI annotation over each `display` substring found
+       *  in the first line (#425 — the contact line's link slugs). Applied only
+       *  when the text fits on ONE line, so measured offsets are accurate. */
+      linkSpans?: Array<{ display: string; href: string }>;
     } = {},
   ) {
     const size = opts.size ?? SIZE_BODY;
@@ -539,16 +581,62 @@ class Layout {
       opts.atomicSegments ?? false,
     );
     const lineHeight = size * LINE_GAP;
+    const singleLine = lines.length === 1;
     for (let i = 0; i < lines.length; i++) {
       this.ensure(lineHeight);
       const lineX = i === 0 ? x : x + hanging;
+      const topY = this.y;
       this.page.drawText(lines[i], {
         x: lineX,
-        y: this.y - size,
+        y: topY - size,
         size,
         font,
         color,
       });
+      if (i === 0) {
+        // Flush-right date tail on the first line's baseline (#425), right-
+        // aligned to the content margin and drawn regular-weight/muted.
+        if (opts.rightText) {
+          const rSize = opts.rightSize ?? size;
+          const rFont = this.fonts.regular;
+          const rValue = this.sanitize ? toWinAnsi(opts.rightText) : opts.rightText;
+          const rX = PAGE_WIDTH - MARGIN - rFont.widthOfTextAtSize(rValue, rSize);
+          this.page.drawText(rValue, {
+            x: rX,
+            y: topY - size,
+            size: rSize,
+            font: rFont,
+            color: opts.rightColor ?? color,
+          });
+        }
+        // Clickable annotation over the whole first line (#425).
+        if (opts.linkUrl) {
+          const w = font.widthOfTextAtSize(lines[0], size);
+          this.registerLink(lineX, topY - size, lineX + w, topY, opts.linkUrl);
+        }
+        // Per-substring link annotations (#425 contact-line slugs). Measure
+        // against the DRAWN first line (whitespace already collapsed by wrap);
+        // skip if the text wrapped so offsets stay accurate. Drawn glyphs are
+        // untouched either way, so the text round-trip is unaffected.
+        //
+        // Search from a running offset that advances past each matched span, so
+        // a display that is a SUBSTRING of an earlier part (e.g. website slug
+        // `example.com` inside email `jane@example.com`, and the email is drawn
+        // first) can't match inside that earlier part and land the rect on the
+        // wrong text. The spans are supplied in draw order, so a monotonic offset
+        // maps each to its own occurrence.
+        if (opts.linkSpans && singleLine) {
+          let searchFrom = 0;
+          for (const span of opts.linkSpans) {
+            const idx = lines[0].indexOf(span.display, searchFrom);
+            if (idx < 0) continue;
+            const x0 = lineX + font.widthOfTextAtSize(lines[0].slice(0, idx), size);
+            const x1 = x0 + font.widthOfTextAtSize(span.display, size);
+            this.registerLink(x0, topY - size, x1, topY, span.href);
+            searchFrom = idx + span.display.length;
+          }
+        }
+      }
       this.advance(lineHeight);
     }
   }
@@ -572,18 +660,32 @@ class Layout {
   }
 
   /**
-   * Draw a bullet as a sequence of `{ text, bold }` runs with word-level
-   * wrapping. A "word" is a run of non-whitespace that may span a bold→regular
-   * boundary (so mid-word emphasis draws correctly); words are separated by a
-   * single space. The bullet marker leads the first line; continuation lines
-   * use `hangingIndent`. Bold is preserved across wraps because it is tracked
-   * per chunk, not per line.
+   * Draw a header line as bold/regular runs (#425 — achievement "type" labels).
+   * A leading substring wrapped in the sentinel emphasis markers draws bold, the
+   * rest regular; the sentinels are stripped, so the round-trip text is
+   * unchanged. Same word-wrapping engine as `drawBullet`, but with no bullet
+   * marker and drawn at the header color/size.
+   */
+  drawHeaderRuns(text: string, size: number) {
+    this.drawRuns(parseBoldRuns(text), size, 0, { marker: "", color: this.black });
+  }
+
+  /**
+   * Draw a sequence of `{ text, bold }` runs with word-level wrapping. A "word"
+   * is a run of non-whitespace that may span a bold→regular boundary (so mid-
+   * word emphasis draws correctly); words are separated by a single space. A
+   * leading `marker` (the bullet "• " by default, "" for a header) leads the
+   * first line; continuation lines use `hangingIndent`. Bold is preserved across
+   * wraps because it is tracked per chunk, not per line.
    */
   private drawRuns(
     runs: Array<{ text: string; bold: boolean }>,
     size: number,
     hangingIndent: number,
+    opts: { marker?: string; color?: RGB } = {},
   ) {
+    const marker = opts.marker ?? BULLET_MARKER;
+    const color = opts.color ?? this.black;
     const words = groupRunsIntoWords(
       runs,
       size,
@@ -594,18 +696,22 @@ class Layout {
     const wordWidth = (w: WordChunk[]) =>
       w.reduce((sum, c) => sum + c.width, 0);
     const space = this.fonts.regular.widthOfTextAtSize(" ", size);
-    const markerWidth = this.fonts.regular.widthOfTextAtSize(BULLET_MARKER, size);
+    const markerWidth = marker
+      ? this.fonts.regular.widthOfTextAtSize(marker, size)
+      : 0;
     const rightEdge = PAGE_WIDTH - MARGIN;
     const lineHeight = size * LINE_GAP;
 
     this.ensure(lineHeight);
-    this.page.drawText(BULLET_MARKER, {
-      x: MARGIN,
-      y: this.y - size,
-      size,
-      font: this.fonts.regular,
-      color: this.black,
-    });
+    if (marker) {
+      this.page.drawText(marker, {
+        x: MARGIN,
+        y: this.y - size,
+        size,
+        font: this.fonts.regular,
+        color,
+      });
+    }
     let x = MARGIN + markerWidth;
     let atLineStart = true;
 
@@ -625,7 +731,7 @@ class Layout {
           y: this.y - size,
           size,
           font: chunk.bold ? this.fonts.bold : this.fonts.regular,
-          color: this.black,
+          color,
         });
         x += chunk.width;
       }
@@ -664,15 +770,23 @@ export async function renderAtsResumePdf(
   const gray = rgb(0.55, 0.55, 0.55);
   const muted = rgb(0.35, 0.35, 0.35);
 
-  const layout = new Layout(doc, { regular, bold }, black, gray, !isEmbedded);
+  const layout = new Layout(
+    doc,
+    { regular, bold },
+    black,
+    gray,
+    parts.PDFString,
+    !isEmbedded,
+  );
 
   // ── Header: name + (headline) + contact line ──
   if (model.contact.name) {
     layout.drawText(model.contact.name, { bold: true, size: SIZE_NAME });
   }
-  // Professional headline (#425) — regular weight, under the name. Populated
-  // only when the model carries one; the field plumbing lands now, honest
-  // parser-side headline extraction is a follow-up (see `buildContact`).
+  // Professional headline (#425) — regular weight, muted, under the name.
+  // Populated when the parser lifted a standalone title tagline from the header
+  // block (`extractHeadline` → `parsed.headline` → `buildContact`); absent
+  // otherwise, so most résumés draw just name + contact line as before.
   if (model.contact.headline) {
     layout.drawText(model.contact.headline, {
       size: SIZE_HEADLINE,
@@ -686,9 +800,33 @@ export async function renderAtsResumePdf(
     ...model.contact.links,
   ].filter((p): p is string => Boolean(p));
   if (contactParts.length > 0) {
+    // Clickable overlays (#425): email → mailto:, each scheme-stripped link slug
+    // → its real target. The visible text stays the shortened display; the
+    // annotation carries the real target. Annotations are outside the content
+    // stream, so the text round-trip is unaffected.
+    //
+    // The href is the ORIGINAL parsed URL (`contact.linkHrefs`, aligned with
+    // `links`) rather than one rebuilt from the `www.`-stripped display: rebuilding
+    // `https://${slug}` from the display would force `https` and drop any `www.`
+    // the source URL carried, so a portfolio/website served only at `www.host` or
+    // over `http` would get a 404-ing link. The display stays `www.`-less; only
+    // the click target uses the original.
+    const linkSpans: Array<{ display: string; href: string }> = [];
+    if (model.contact.email)
+      linkSpans.push({
+        display: model.contact.email,
+        href: `mailto:${model.contact.email}`,
+      });
+    model.contact.links.forEach((link, i) =>
+      linkSpans.push({
+        display: link,
+        href: model.contact.linkHrefs?.[i] ?? `https://${link}`,
+      }),
+    );
     layout.drawText(contactParts.join("  •  "), {
       size: SIZE_CONTACT,
       color: muted,
+      linkSpans,
     });
   }
   layout.advance(GAP_AFTER_CONTACT);
@@ -748,13 +886,25 @@ function drawSectionHeading(layout: Layout, heading: string) {
 
 function drawEntry(layout: Layout, entry: AtsEntry, mutedColor: RGB) {
   if (entry.headerLine) {
-    layout.drawText(entry.headerLine, {
-      // Every header is bold EXCEPT where the model opts out — the skills list,
-      // which reads as regular-weight body text (#425).
-      bold: entry.headerBold ?? true,
-      size: SIZE_HEADER,
-      atomicSegments: entry.atomicSegments,
-    });
+    if (entry.headerLine.includes(EMPHASIS_OPEN)) {
+      // Mixed-weight header (#425 — an achievement "type" label bolded, the rest
+      // regular). Routed to the run-aware draw; these headers carry no flush-right
+      // date, so the marker-less run path covers them.
+      layout.drawHeaderRuns(entry.headerLine, SIZE_HEADER);
+    } else {
+      layout.drawText(entry.headerLine, {
+        // Every header is bold EXCEPT where the model opts out — the skills list,
+        // which reads as regular-weight body text (#425).
+        bold: entry.headerBold ?? true,
+        size: SIZE_HEADER,
+        atomicSegments: entry.atomicSegments,
+        // Flush-right date on the header line (#425) — set for a title-less role /
+        // degree-less program, where the org/date anchor lives on the header.
+        rightText: entry.headerLineDate,
+        rightColor: mutedColor,
+        rightSize: SIZE_SUB,
+      });
+    }
   }
   if (entry.subLine) {
     layout.advance(GAP_AFTER_HEADER);
@@ -768,6 +918,11 @@ function drawEntry(layout: Layout, entry: AtsEntry, mutedColor: RGB) {
       size: SIZE_SUB,
       color: mutedColor,
       atomicSegments: true,
+      // Flush-right date on the sub-line (#425) — set for a titled role /
+      // degreed entry, where the org anchor lives on the sub-line.
+      rightText: entry.subLineDate,
+      rightColor: mutedColor,
+      rightSize: SIZE_SUB,
     });
   }
   for (const bullet of entry.bullets) {

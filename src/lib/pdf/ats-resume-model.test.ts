@@ -3,6 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { buildAtsResumeModel } from "./ats-resume-model.ts";
+import { EMPHASIS_OPEN, EMPHASIS_CLOSE } from "./auto-bold-metrics.ts";
 import type { CascadeResult } from "../heuristics/types.ts";
 import type { AnonymousAtsScore, BulletObservation } from "../score/score.ts";
 
@@ -96,14 +97,12 @@ describe("buildAtsResumeModel", () => {
     expect(headings).toEqual(["Experience", "Education", "Skills"]);
 
     const exp = model.sections[0].entries[0];
-    // Stacked round-trip shape (#284): title leads the bold header, the
-    // "Company · Location  Dates" line (carrying the parser's date anchor) sits
-    // on the sub-line so the emitted role re-segments back to one entry. With no
-    // location the company is bare, so the date is joined with a " · " org-signature
-    // marker (#298 review) — "Company · Dates" — so the re-parse anchor is
-    // recognizably the company, not the title.
-    expect(exp.headerLine).toBe("Senior PM");
-    expect(exp.subLine).toBe("Acme · 2020 – 2024");
+    // One-line header (#436): "Title · Company, Location" on a single header
+    // line, the range date drawn flush-right via `headerLineDate` (no sub-line).
+    // With no location the company is bare, so the header is "Senior PM · Acme".
+    expect(exp.headerLine).toBe("Senior PM · Acme");
+    expect(exp.headerLineDate).toBe("2020 – 2024");
+    expect(exp.subLine).toBeUndefined();
     expect(exp.bullets).toEqual([
       "Led migration of legacy auth system to OAuth",
       "Drove 30% revenue growth across the platform",
@@ -201,6 +200,55 @@ describe("buildAtsResumeModel", () => {
     );
   });
 
+  it("bolds only the leading type label of a 'Type · description' achievement", () => {
+    const result = makeResult({
+      heuristic_achievements: [
+        {
+          title: "Patent · Issued US10275736B1; bulk catalog editor",
+          year: "2019",
+        },
+      ],
+    });
+    const model = buildAtsResumeModel(result, makeScore([]));
+    const ach = model.sections.find((s) => s.kind === "achievements");
+    const entry = ach!.entries[0];
+    // The type ("Patent") is wrapped in the PUA emphasis sentinels; the rest of
+    // the header — description and year — stays outside them (regular weight).
+    expect(entry.headerLine).toBe(
+      `${EMPHASIS_OPEN}Patent${EMPHASIS_CLOSE} · ` +
+        "Issued US10275736B1; bulk catalog editor · 2019",
+    );
+    // Base line drawn regular; the sentinels carry the per-run bold.
+    expect(entry.headerBold).toBe(false);
+  });
+
+  it("keeps a type-less achievement header fully bold (no emphasis sentinels)", () => {
+    const result = makeResult({
+      heuristic_achievements: [{ title: "Best Paper Award", year: "2021" }],
+    });
+    const model = buildAtsResumeModel(result, makeScore([]));
+    const entry = model.sections.find((s) => s.kind === "achievements")!
+      .entries[0];
+    expect(entry.headerLine).toBe("Best Paper Award · 2021");
+    expect(entry.headerLine).not.toContain(EMPHASIS_OPEN);
+    expect(entry.headerBold).toBe(true);
+  });
+
+  it("does not treat a long prose first segment as a type label", () => {
+    // A " · " inside a full sentence must not bold the whole clause — the
+    // leading segment exceeds the type-label length guard.
+    const longFirst =
+      "Recognized across the org for sustained impact over many years · runner-up";
+    const result = makeResult({
+      heuristic_achievements: [{ title: longFirst, year: "2020" }],
+    });
+    const model = buildAtsResumeModel(result, makeScore([]));
+    const entry = model.sections.find((s) => s.kind === "achievements")!
+      .entries[0];
+    expect(entry.headerLine).not.toContain(EMPHASIS_OPEN);
+    expect(entry.headerBold).toBe(true);
+  });
+
   it("omits empty sections", () => {
     const result = makeResult({
       experience: [],
@@ -235,7 +283,7 @@ describe("buildAtsResumeModel", () => {
 
   // ── #425 ───────────────────────────────────────────────────────────────────
 
-  it("puts the role team/division on the org sub-line as the third middot segment (#425)", () => {
+  it("puts the role team/division on the one-line header as the trailing segment (#436)", () => {
     const result = makeResult({
       experience: [
         {
@@ -251,14 +299,16 @@ describe("buildAtsResumeModel", () => {
     });
     const model = buildAtsResumeModel(result, makeScore([]));
     const exp = model.sections.find((s) => s.heading === "Experience")!;
-    // Company · Location · Team, with the date glued after the whitespace gap
-    // (the date is intentionally NOT drawn flush-right — see the #425 deviation).
-    expect(exp.entries[0].subLine).toBe(
-      "Google · Mountain View, CA · Enterprise Platforms  2021 – 2024",
+    // One-line header: "Title · Company, Location · Team"; the range date is
+    // carried separately in `headerLineDate` and drawn flush-right, not glued.
+    expect(exp.entries[0].headerLine).toBe(
+      "Senior PM · Google, Mountain View, CA · Enterprise Platforms",
     );
+    expect(exp.entries[0].headerLineDate).toBe("2021 – 2024");
+    expect(exp.entries[0].subLine).toBeUndefined();
   });
 
-  it("omits the team segment cleanly when a role has no team (#425)", () => {
+  it("omits the team segment cleanly when a role has no team (#436)", () => {
     const result = makeResult({
       experience: [
         {
@@ -273,21 +323,70 @@ describe("buildAtsResumeModel", () => {
     });
     const model = buildAtsResumeModel(result, makeScore([]));
     const exp = model.sections.find((s) => s.heading === "Experience")!;
-    expect(exp.entries[0].subLine).toBe(
-      "Google · Mountain View, CA  2021 – 2024",
+    // No team → header is "Title · Company, Location"; date flush-right.
+    expect(exp.entries[0].headerLine).toBe(
+      "Senior PM · Google, Mountain View, CA",
     );
+    expect(exp.entries[0].headerLineDate).toBe("2021 – 2024");
+    expect(exp.entries[0].subLine).toBeUndefined();
   });
 
-  it("strips the URL scheme from contact links but KEEPS a leading www (#425 round-trip)", () => {
+  it("renders a location-less titled role on one line, date flush-right (#436)", () => {
+    // The old two-line shape needed a " · " org signature on a separate anchor
+    // line so the re-parser read the neutral company as the company, not the
+    // title (#298). The one-line header drops that mechanism; the re-parse
+    // title/company disambiguation for this shape is deferred to #436.
+    const result = makeResult({
+      experience: [
+        {
+          title: "Chair",
+          company: "Leadership Experience",
+          start_date: "2021",
+          end_date: "2024",
+          description: "Ran the committee",
+        },
+      ],
+    });
+    const model = buildAtsResumeModel(result, makeScore([]));
+    const exp = model.sections.find((s) => s.heading === "Experience")!;
+    expect(exp.entries[0].headerLine).toBe("Chair · Leadership Experience");
+    expect(exp.entries[0].headerLineDate).toBe("2021 – 2024");
+    expect(exp.entries[0].subLine).toBeUndefined();
+  });
+
+  it("keeps a single-token (non-range) date glued rather than flush-right (#436)", () => {
+    // Only a lone year is known — not a range — so it is NOT drawn flush-right
+    // (the flush() exemption only protects ranges); it stays glued after a
+    // whitespace gap on the one-line header.
+    const result = makeResult({
+      experience: [
+        {
+          title: "Analyst",
+          company: "Globex",
+          location: "Austin, TX",
+          start_date: "2022",
+          description: "Did analysis",
+        },
+      ],
+    });
+    const model = buildAtsResumeModel(result, makeScore([]));
+    const exp = model.sections.find((s) => s.heading === "Experience")!;
+    expect(exp.entries[0].headerLine).toBe("Analyst · Globex, Austin, TX  2022");
+    expect(exp.entries[0].headerLineDate).toBeUndefined();
+    expect(exp.entries[0].subLine).toBeUndefined();
+  });
+
+  it("fully display-formats contact links (scheme + www stripped) so the www round-trip holds (#425)", () => {
     const result = makeResult({
       linkedin_url: "https://www.linkedin.com/in/janesmith",
       github_url: "https://github.com/janesmith",
       portfolio_url: "https://jane.dev/",
     });
     const model = buildAtsResumeModel(result, makeScore([]));
-    // Scheme + trailing slash gone; a leading `www.` is preserved so the parser
-    // re-adds `https://` on re-parse and the linkedin_url round-trips.
-    expect(model.contact.links).toContain("www.linkedin.com/in/janesmith");
+    // Scheme, a leading `www.`, and any trailing slash are all dropped. Full
+    // www-stripping round-trips because the parser's `normalizeUrl` canonicalizes
+    // `www.` away on both the original parse and the re-parse of this display.
+    expect(model.contact.links).toContain("linkedin.com/in/janesmith");
     expect(model.contact.links).toContain("github.com/janesmith");
     expect(model.contact.links).toContain("jane.dev");
     for (const link of model.contact.links)

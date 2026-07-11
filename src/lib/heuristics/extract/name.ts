@@ -322,3 +322,72 @@ export function extractName(
   if (!best) return { confidence: 0 };
   return { value: best.text, confidence: Math.min(best.score, 1) };
 }
+
+// ── Headline ──────────────────────────────────────────────────────────────────
+
+/**
+ * The professional headline the candidate placed standalone under their name in
+ * the header block ("Engineering Lead", "Senior Product Designer"). This is the
+ * exact line `extractName` works to REJECT as the name (via `looksLikeTitle`) —
+ * here we keep it instead of discarding it, so the ATS export can redraw it
+ * under the name rather than silently dropping it (#425 follow-up).
+ *
+ * It is distinct from `current_title`, which is derived from the most-recent
+ * experience role; a header tagline is the candidate's own framing and may
+ * differ. We surface whatever the header carries, faithfully.
+ *
+ * Conservative by construction — only a genuine title-keyword line in the top of
+ * the profile block, above the contact cluster, qualifies:
+ *   - the name line is skipped (it is not the headline);
+ *   - a section header ("SUMMARY") or the first contact-bearing line
+ *     (email / phone / linkedin / any URL) ends the scan — the header block is
+ *     over, so a title-keyword line deeper in the résumé can never be mistaken
+ *     for the headline;
+ *   - the line must pass `looksLikeTitle` — a plain name or a location line
+ *     never qualifies, so résumés with no headline populate nothing.
+ * This symmetry with the exported layout (name, headline, contact) keeps the
+ * parse → export → re-parse round-trip stable: the redrawn headline re-parses
+ * back to the same value.
+ */
+/** True when `text` IS the candidate's name (so it is not the headline). Compares
+ *  case-insensitively AND treats a line the name CONTAINS as the name, so a
+ *  normalized/merged name (a stacked-name second line, an occupational-word
+ *  surname) can't leak through a byte-exact `===` and be returned as the headline
+ *  (full_name "John Engineer" → headline "Engineer") (Samhit review, PR #434). */
+function isNameLine(text: string, name: string | undefined): boolean {
+  if (!name) return false;
+  const nName = name.trim().toLowerCase();
+  const nText = text.toLowerCase();
+  return nName === nText || nName.includes(nText);
+}
+
+/** True when `text` begins the contact cluster (email / phone / linkedin / any
+ *  URL) — the header block is over, so nothing at or below it is the headline.
+ *  Resets `lastIndex` defensively: these constants may carry a `g` flag whose
+ *  test() mutates state (mirrors `findContactClusterY`). */
+function startsContactCluster(text: string): boolean {
+  const hit =
+    EMAIL_RE.test(text) || PHONE_RE.test(text) || LINKEDIN_RE.test(text);
+  EMAIL_RE.lastIndex = 0;
+  PHONE_RE.lastIndex = 0;
+  LINKEDIN_RE.lastIndex = 0;
+  return hit || text.includes("@") || /https?:\/\//i.test(text);
+}
+
+export function extractHeadline(
+  profile: PdfSection,
+  name: string | undefined,
+): { value?: string; confidence: number } {
+  const scan = Math.min(profile.lines.length, 5);
+  for (let i = 0; i < scan; i++) {
+    const text = profile.lines[i].text.trim();
+    if (!text) continue;
+    if (isNameLine(text, name)) continue; // the name is not its own headline
+    if (matchSectionHeader(text)) break; // reached a section — header block over
+    if (startsContactCluster(text)) break; // contact cluster — header block over
+    if (text.length > 60) continue;
+    if (!looksLikeTitle(text)) continue;
+    return { value: text, confidence: 0.7 };
+  }
+  return { confidence: 0 };
+}

@@ -249,6 +249,29 @@ function isSoftWrapContinuation(pending: string, nextText: string): boolean {
   // Always skip if the next line starts a new sub-list (label or bullet).
   if (SKILLS_NEW_ENTRY_RE.test(nextText)) return false;
 
+  // Condition A′ (symmetric to A): the NEXT line LEADS with a bare connector
+  // glyph — a soft-wrap that broke a skill/list immediately BEFORE the connector
+  // ("…API Design" ⏎ "& Development", "…CI" ⏎ "+ CD"). Condition A only catches
+  // the break AFTER the glyph ("Hiring &" ⏎ "Talent Acquisition"); when the
+  // wrap lands before it and the tail carries no comma, Condition B can't fire
+  // either, so the fragment would wrongly become its own skill (`& Development`).
+  // Only `&`/`+` — never the list-bullet glyphs `-`/`–`/`•`/`*`, which
+  // SKILLS_NEW_ENTRY_RE already routed to `return false` above.
+  //
+  // `&` is unambiguously a connector — fire always. `+` is genuinely ambiguous:
+  // SKILLS_NEW_ENTRY_RE does NOT list it, so it is used BOTH as a connector
+  // ("…CI" ⏎ "+ CD") and as a list BULLET ("Python, Java" ⏎ "+ Ruby on Rails"),
+  // and firing on the latter merges a bogus "Java + Ruby on Rails" skill (Samhit
+  // review, PR #434). Disambiguate on the CONTINUATION: a `+`-connector tail
+  // completes a compound and is a single short token ("CD"); a `+`-bulleted new
+  // item is a multi-word phrase ("Ruby on Rails"). So rejoin a leading `+` only
+  // when its continuation is a single word.
+  const lead = /^([&+])\s+(\S.*)$/.exec(nextText);
+  if (lead) {
+    if (lead[1] === "&") return true;
+    if (!/\s/.test(lead[2].trim())) return true;
+  }
+
   // Condition A: pending ends with an explicit continuation glyph — the glyph
   // must be its OWN whitespace-separated token ("Hiring &", "Data -"), not the
   // tail of a compact skill name like "C++" or "PHP7+" (#301: our own

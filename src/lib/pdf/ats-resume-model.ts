@@ -32,7 +32,9 @@ import {
   toBulletExperience,
 } from "../score/group-bullets.ts";
 import { buildProjectDates } from "../score/entry-dates.ts";
-import { buildContactFields } from "../contact.ts";
+import { isLoneDateRange } from "../heuristics/line-primitives.ts";
+import { EMPHASIS_OPEN, EMPHASIS_CLOSE } from "./auto-bold-metrics.ts";
+import { buildContactFields, formatLinkDisplay } from "../contact.ts";
 import type {
   ContactOverrides,
   EditableParse,
@@ -54,6 +56,13 @@ export interface AtsContact {
    *  for display (`https://www.linkedin.com/in/jane` → `linkedin.com/in/jane`,
    *  #425). */
   links: string[];
+  /** The original, absolute (scheme-bearing) URL for each entry in {@link links},
+   *  index-aligned. The PDF's clickable link annotation targets THIS, not a
+   *  target rebuilt from the `www.`-stripped display — so a portfolio/website
+   *  served only at `www.host` or over `http` still resolves (#425). Optional so
+   *  hand-built `AtsContact` literals stay valid; the renderer falls back to
+   *  `https://${display}` when absent. */
+  linkHrefs?: string[];
   /**
    * Classified contact/identity links (#335), the single source of truth for
    * the JSON-Resume export's `basics.profiles` (#334). Read straight off
@@ -105,10 +114,31 @@ export interface AtsEntryFields {
 export interface AtsEntry {
   /** Primary header line, e.g. "Senior PM · Google". */
   headerLine: string;
-  /** Secondary line under the header, e.g. "Company · Location · Team  Dates".
-   *  The date range is glued onto this line (not drawn flush-right) so a wide
-   *  same-`y` gap can't trip the parser's column detector (#425 deviation). */
+  /**
+   * Date range drawn FLUSH-RIGHT on the header line's own baseline (#425). Set
+   * instead of {@link subLineDate} when the org / date-anchor text sits on
+   * `headerLine` rather than a sub-line — a title-less role, or a degree-less
+   * program whose inline date is the #302 entry-boundary cue. The `flush()`
+   * date-range exemption (`sections.ts`) keeps this right-aligned date merged
+   * into the header's `PdfLine` on re-parse, so the anchor survives.
+   */
+  headerLineDate?: string;
+  /** Secondary line under the header, e.g. "Company · Location · Team". The date
+   *  range is carried separately in {@link subLineDate} and drawn flush-right on
+   *  this line's baseline (#425), not glued into this string. */
   subLine?: string;
+  /**
+   * Date range drawn FLUSH-RIGHT on the sub-line's baseline (#425), carried
+   * apart from {@link subLine} so it can be right-aligned instead of glued. Set
+   * when the org anchor is on `subLine` (a titled role, a degreed entry). The
+   * extracted text order stays "org … date": the `flush()` exemption
+   * (`sections.ts`) keeps the wide same-`y` gap between the org text and this
+   * date from splitting the date onto its own `PdfLine`, so the org line keeps
+   * its date anchor and does not re-parse title↔company-swapped (#298). Only a
+   * genuine {@link isLoneDateRange} range is routed here; a single-token date
+   * stays glued into `subLine`/`headerLine`.
+   */
+  subLineDate?: string;
   /**
    * Whether `headerLine` is drawn bold. Defaults to `true` (every role /
    * degree / achievement header is bold); set `false` on the skills entry so
@@ -161,16 +191,17 @@ export interface AtsResumeModel {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /**
- * Strip a URL's `https?://` scheme and any trailing slash for display, KEEPING
- * a leading `www.` (#425). Round-trip-safe counterpart to the contact-card's
- * `formatLinkDisplay`, which also drops `www.` — see the note in `buildContact`
- * for why the exported PDF must preserve it. Idempotent.
+ * Guarantee an absolute-URL scheme for a link's clickable-annotation href,
+ * WITHOUT stripping a leading `www.` (#425). The counterpart to the display's
+ * `formatLinkDisplay`: the display drops scheme + `www.`, but the click target
+ * must keep both so a `www.`-only host or an `http`-only link still resolves.
+ * A value that already carries a scheme (every parsed URL does — `normalizeUrl`
+ * adds one) passes through unchanged; a scheme-less inline-edit value gets
+ * `https://`.
  */
-function stripLinkScheme(url: string): string {
-  return url
-    .trim()
-    .replace(/^https?:\/\//i, "")
-    .replace(/\/+$/, "");
+function ensureScheme(url: string): string {
+  const trimmed = url.trim();
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
 /** Apply ContactCard's override semantics: "" clears, undefined keeps parsed. */
@@ -196,6 +227,10 @@ export function buildContact(
   };
 
   const name = valueFor("full_name") || result.parsed.full_name || "";
+  // Header headline (#425 follow-up): the standalone title tagline the parser
+  // lifted from the profile block ("Engineering Lead"), redrawn under the name.
+  // Not inline-editable (no ContactOverrides key), so read straight off parsed.
+  const headline = (result.parsed.headline ?? "").trim();
   const email = valueFor("email");
   const phone = valueFor("phone");
   const location = valueFor("location");
@@ -203,35 +238,48 @@ export function buildContact(
   // Links: since #427 every link edit (including LinkedIn corrections) folds
   // into the parsed slots via `profileOverrides`, so `result.parsed` already
   // carries the edited values. LinkedIn keeps its confidence gating via the
-  // display field (unchanged behavior); the remaining link fields are read
-  // straight off the parsed resume. Each is scheme-stripped for display via
-  // `stripLinkScheme` (#425) — `https://www.linkedin.com/in/jane` →
-  // `www.linkedin.com/in/jane`.
+  // display field (read straight off the gated field, not the override path);
+  // the remaining link fields are read straight off the parsed resume. Each is
+  // fully display-formatted via `formatLinkDisplay` (#425) — scheme, a leading
+  // `www.`, and any trailing slash dropped:
+  // `https://www.linkedin.com/in/jane` → `linkedin.com/in/jane`.
   //
-  // NOTE: unlike the contact-card's `formatLinkDisplay`, this KEEPS a leading
-  // `www.`. Stripping `www.` breaks the round-trip: the parser re-adds a
-  // `https://` scheme on re-parse but never re-adds `www.`, so a www-stripped
-  // `linkedin.com/in/jane` re-parses to `https://linkedin.com/in/jane` —
-  // dropping the `www.` the original carried (corpus-roundtrip `linkedin_url`
-  // regression). Full www-stripping is deferred to a parser-canonicalization
-  // follow-up. The helper is idempotent, so an already-stripped value passes
-  // through unchanged.
+  // Full `www.` stripping now round-trips: the parser's `normalizeUrl`
+  // (`contact/url-utils.ts`, `regex-fallback.ts`) canonicalizes `www.` away on
+  // BOTH the original parse AND the re-parse of this exported display, so a
+  // `www.`-bearing source URL and its www-less display both resolve to the same
+  // scheme-prefixed, www-less `linkedin_url`/`github_url` — the corpus-roundtrip
+  // `linkedin_url` invariant holds. `formatLinkDisplay` is idempotent, so an
+  // already-stripped value passes through unchanged.
+  //
+  // Alongside each display slug, keep the original absolute URL in `linkHrefs`
+  // (index-aligned) for the PDF's clickable annotation target — see the field
+  // note on `AtsContact.linkHrefs`. `ensureScheme` only guarantees a scheme; it
+  // never strips `www.` (unlike the display), so a `www.`-only host stays
+  // reachable. A same-index `push` pair keeps the two arrays aligned.
   const links: string[] = [];
+  const linkHrefs: string[] = [];
+  const addLink = (url: string) => {
+    links.push(formatLinkDisplay(url));
+    linkHrefs.push(ensureScheme(url));
+  };
   const linkedinField = byKey.get("linkedin_url");
   const linkedin =
     linkedinField && !linkedinField.gated ? linkedinField.value.trim() : "";
-  if (linkedin) links.push(stripLinkScheme(linkedin));
+  if (linkedin) addLink(linkedin);
   const parsed = result.parsed;
-  if (parsed.github_url) links.push(stripLinkScheme(parsed.github_url));
-  if (parsed.portfolio_url) links.push(stripLinkScheme(parsed.portfolio_url));
-  if (parsed.website_url) links.push(stripLinkScheme(parsed.website_url));
+  if (parsed.github_url) addLink(parsed.github_url);
+  if (parsed.portfolio_url) addLink(parsed.portfolio_url);
+  if (parsed.website_url) addLink(parsed.website_url);
 
   return {
     name,
+    headline: headline || undefined,
     email: email || undefined,
     phone: phone || undefined,
     location: location || undefined,
     links,
+    linkHrefs,
     // `parsed.profiles` is already override-applied (applyOverrides re-derives it
     // from the edited legacy keys + user-added extras, #335), so read it straight
     // — never re-derive from the four legacy keys here. Absent ⇒ no links.
@@ -282,6 +330,42 @@ function experienceDateRange(exp: {
 
 function joinHeader(parts: Array<string | undefined>, sep: string): string {
   return parts.filter((p) => p && p.trim()).join(sep);
+}
+
+/** Longest a leading achievement segment can be and still read as a "type"
+ *  label ("Patent", "Publication", "Exit", "Best Paper Award") rather than a
+ *  full sentence — guards against bolding an entire prose title that merely
+ *  happens to carry a " · ". */
+const ACHIEVEMENT_TYPE_MAX_LEN = 28;
+
+/**
+ * Build an achievement's header string, emphasizing ONLY the leading "type"
+ * label (e.g. "Patent", "Publication") when the title carries the canonical
+ * "Type · description" shape — the rest of the header stays regular weight.
+ *
+ * The type is the first `" · "`-delimited segment of `title`, kept only when it
+ * is short enough to read as a label (see `ACHIEVEMENT_TYPE_MAX_LEN`). It is
+ * wrapped in the renderer's PUA emphasis sentinels (`EMPHASIS_OPEN`/`CLOSE`) so
+ * `drawEntry` draws just that run bold; the sentinels are stripped before
+ * drawing, so the round-trip text is unchanged (display-only weight, #284/#425).
+ * When there is no such type segment the header is returned plain (no
+ * sentinels) and the caller keeps the whole line bold as before.
+ */
+function buildAchievementHeader(
+  title: string,
+  year: string | undefined,
+): { headerLine: string; emphasized: boolean } {
+  const idx = title.indexOf(" · ");
+  const type = idx >= 0 ? title.slice(0, idx).trim() : "";
+  if (idx >= 0 && type && type.length <= ACHIEVEMENT_TYPE_MAX_LEN) {
+    const rest = title.slice(idx + 3);
+    const emphasizedTitle = `${EMPHASIS_OPEN}${type}${EMPHASIS_CLOSE} · ${rest}`;
+    return {
+      headerLine: joinHeader([emphasizedTitle, year], " · "),
+      emphasized: true,
+    };
+  }
+  return { headerLine: joinHeader([title, year], " · "), emphasized: false };
 }
 
 /**
@@ -377,73 +461,58 @@ export function buildAtsResumeModel(
   const sections: AtsSection[] = [];
 
   // ── Experience ──
-  // Round-trip layout (#284): emit the STACKED shape the text-only parser is
-  // tuned to re-segment — the role TITLE on the bold header line, and
-  // "Company · Location" followed by the dates after a whitespace gap (not a
-  // third " · " — see the join below) on the sub-line. The date lives there
-  // so that line becomes the parser's `date_range` anchor (one anchor per role),
-  // with the title one line above it (within the 2-line header lookback). The
-  // old single combined "Title · Company · Location" header line (with the date
-  // on a separate bare line below) did NOT round-trip: a "Company Inc. Location"
-  // header trips the description-prose detector (an "Inc. Seoul"-style internal
-  // sentence break), so the parser folded the header into the previous role's
-  // body and dropped the role — and a bulletless role had no anchor at all.
+  // One-line header shape: "Title · Company, Location · Team" with the date
+  // drawn FLUSH-RIGHT on that same header line — the compact canonical résumé
+  // shape. Company and Location join with a COMMA ("116 Ideas Inc., Santa
+  // Clara, CA"); the title and any team/division segment attach with " · ".
+  //
+  // ⚠️ Round-trip tradeoff (supersedes the #284/#298 stacked two-line shape):
+  // collapsing title + company onto one line removes the structural signal the
+  // text-only parser used to tell title from company (it has no font signal —
+  // `groupIntoLines` drops per-glyph weight). Some fixtures with neutral or
+  // parenthetical company names therefore re-parse title↔company-swapped or
+  // truncated, so the corpus round-trip gate baselines `experience` on the
+  // affected fixtures (see KNOWN_FAILURES in `corpus-roundtrip.test.ts`) and
+  // the #284/#358 repro assertions are relaxed. Teaching the parser to
+  // round-trip this one-line shape (disambiguateCompanyTitle + entry-block
+  // anchoring) is tracked as a follow-up (#436) — until then this is a
+  // deliberate look-over-fidelity choice for the reconstructed PDF.
   const experienceEntries: AtsEntry[] = experiences.map((exp, i) => {
     const title = (exp.title ?? "").trim();
-    // Company · Location · Team joined with the dot (#425 — the team/division
-    // was previously dropped at model-build time even though the parser
-    // populates `exp.team`). The date range is glued onto the same line below
-    // (the flush-right treatment was dropped — see the deviation note there).
-    const org = joinHeader([exp.company, exp.location, exp.team], " · ");
-    // Re-parse company/title tiebreak signature (#298 round-trip). When this role
-    // has a TITLE, the org+date line becomes the parser's date-anchor sub-line, and
-    // the re-parser only treats a bare, neutral anchor as the company (rather than
-    // the title) when the line carries a positive org signal. A `Company · Location`
-    // org already carries the " · " tell; a location-less `Company` does NOT, so a
-    // neutral company ("Leadership Experience", "Books for Life") would re-parse
-    // inverted (company↔title swap). Emit the " · " signature on the sub-line for
-    // that location-less-with-title case so the anchor is recognizably the company;
-    // the re-parser strips the trailing marker back to a clean company field.
+    // Company + Location join with a comma; the team/division (#425) attaches
+    // after a middot: "Company, Location · Team".
+    const companyLocation = [exp.company, exp.location]
+      .filter((p) => p && p.trim())
+      .join(", ");
+    const org = joinHeader([companyLocation, exp.team], " · ");
     const dateRange = experienceDateRange(exp);
-    const needsOrgSignature =
-      Boolean(title) && Boolean(org) && Boolean(dateRange) && !org.includes(" · ");
-    // Location-less-with-title: put the date after a " · " so the re-parse anchor
-    // carries the org signature (reads "Company · Dates"). Otherwise keep the date
-    // after the whitespace gap so a "Company · Location" org stays clean on strip.
-    //
-    // The date is deliberately GLUED onto the org line rather than drawn
-    // flush-right (#425 flush-right dropped — see the deviation note): a
-    // flush-right date opens a >50pt same-`y` gap that the parser's embedded
-    // multi-column reconstruction reads as a column boundary
-    // (`COLUMN_GAP_THRESHOLD`, `sections.ts`), which on dense/consecutive-role
-    // layouts forms a right-edge date band and swaps title/company on re-parse
-    // (corpus-roundtrip regression on the two-column fixtures). The team segment
-    // below IS round-trip-safe and stays.
-    const subLine = needsOrgSignature
-      ? [org, dateRange].filter(Boolean).join(" · ") || undefined
-      : [org, dateRange].filter(Boolean).join("  ") || undefined;
-    // Title-less role: the org/date line leads on the (bold) header itself, with
-    // the date glued after a whitespace gap so it still carries the date anchor
-    // (a title-less header is not disambiguated, so it needs no signature).
-    const headerOrgLine = [org, dateRange].filter(Boolean).join("  ") || undefined;
+    // Full one-line header: "Title · Company, Location · Team".
+    const headerText = joinHeader([title, org], " · ");
+    const bullets = resolveBullets(
+      bulletsByIndex.get(expOffset + i),
+      bulletOverrides,
+      exp.description,
+    );
+    // Structured JSON-Resume source (#334): name←company, position←title.
+    // `endDate` is dropped when the role is current (JSON Resume reads an absent
+    // endDate as ongoing).
+    const fields: AtsEntryFields = {
+      organization: exp.company || undefined,
+      position: title || undefined,
+      startDate: exp.start_date || undefined,
+      endDate: exp.is_current ? undefined : exp.end_date || undefined,
+      isCurrent: exp.is_current || undefined,
+    };
+    // A genuine range draws flush-right on the header (the `flush()` date-range
+    // exemption keeps it merged into the header `PdfLine` on re-parse); a
+    // single-token date (or none) glues after a whitespace gap.
+    if (headerText && isLoneDateRange(dateRange)) {
+      return { headerLine: headerText, headerLineDate: dateRange, bullets, fields };
+    }
     return {
-      headerLine: title || headerOrgLine || "Experience",
-      subLine: title ? subLine : undefined,
-      bullets: resolveBullets(
-        bulletsByIndex.get(expOffset + i),
-        bulletOverrides,
-        exp.description,
-      ),
-      // Structured JSON-Resume source (#334): name←company, position←title.
-      // `endDate` is dropped when the role is current (JSON Resume reads an
-      // absent endDate as ongoing).
-      fields: {
-        organization: exp.company || undefined,
-        position: title || undefined,
-        startDate: exp.start_date || undefined,
-        endDate: exp.is_current ? undefined : exp.end_date || undefined,
-        isCurrent: exp.is_current || undefined,
-      },
+      headerLine: [headerText, dateRange].filter(Boolean).join("  ") || "Experience",
+      bullets,
+      fields,
     };
   });
 
@@ -469,21 +538,33 @@ export function buildAtsResumeModel(
   }));
 
   // ── Achievements ──
-  const achievementEntries: AtsEntry[] = achievements.map((ach, i) => ({
-    headerLine: joinHeader([ach.title, ach.year], " · ") || "Achievement",
-    subLine: undefined,
-    bullets: resolveBullets(
-      bulletsByIndex.get(achOffset + i),
-      bulletOverrides,
-      ach.description,
-    ),
-    // Structured source for the JSON Resume `awards[]` export (#421). Display
-    // code never reads `fields`; it renders `headerLine`/`bullets` above.
-    fields: {
-      ...(ach.title ? { title: ach.title } : {}),
-      ...(ach.year ? { startDate: ach.year } : {}),
-    },
-  }));
+  const achievementEntries: AtsEntry[] = achievements.map((ach, i) => {
+    // Bold only the leading "type" label ("Patent", "Publication") when the
+    // title carries the canonical "Type · description" shape; the rest of the
+    // header stays regular. A type-less title keeps the whole header bold.
+    const { headerLine, emphasized } = buildAchievementHeader(
+      ach.title,
+      ach.year,
+    );
+    return {
+      headerLine: headerLine || "Achievement",
+      // The emphasized header carries its own per-run weight (via the sentinels),
+      // so the base line is drawn regular; a plain header stays fully bold.
+      headerBold: emphasized ? false : true,
+      subLine: undefined,
+      bullets: resolveBullets(
+        bulletsByIndex.get(achOffset + i),
+        bulletOverrides,
+        ach.description,
+      ),
+      // Structured source for the JSON Resume `awards[]` export (#421). Display
+      // code never reads `fields`; it renders `headerLine`/`bullets` above.
+      fields: {
+        ...(ach.title ? { title: ach.title } : {}),
+        ...(ach.year ? { startDate: ach.year } : {}),
+      },
+    };
+  });
 
   // ── Education ──
   const educationEntries: AtsEntry[] = education.map((edu) => {
@@ -512,18 +593,26 @@ export function buildAtsResumeModel(
       }) ||
       edu.year ||
       "";
+    // The graduation date is drawn FLUSH-RIGHT on the org line's baseline
+    // (#425), carried in `subLineDate`/`headerLineDate` rather than glued — the
+    // `flush()` date-range exemption (`sections.ts`) keeps the wide same-`y` gap
+    // from splitting it off. Only a genuine range (`isLoneDateRange`) is
+    // right-aligned; a single graduation year stays glued (the exemption only
+    // protects ranges).
+    const rightAlignEduDate = isLoneDateRange(eduDates);
     // Entry-boundary cue (#302). The re-parser's education segmenter opens a NEW
     // entry when a line reads as an entry lead — a DEGREE line, an
     // institution-hint line, or an `isInlineDatedProgram` header (a program/field
     // title carrying its own inline year, extract/education.ts). A degree-BEARING
     // entry leads with its degree, so the segmenter always sees the boundary and
     // two of them round-trip cleanly. A degree-LESS entry's header is a bare
-    // program/field title with NO such cue: emitting the graduation date on the
-    // *sub-line* (with the institution) leaves the header cue-less, so two
-    // degree-less entries re-parse as ONE — the second glues onto the first
-    // (entry LOSS, 2 → 1). Keep the date INLINE on the degree-less header instead,
-    // so it reads as an `isInlineDatedProgram` lead, and drop the institution
-    // alone to the sub-line.
+    // program/field title with NO such cue: the graduation date must stay on that
+    // HEADER line (so it reads as an `isInlineDatedProgram` lead), or two
+    // degree-less entries re-parse as ONE (entry LOSS, 2 → 1). So the date's
+    // flush-right slot follows the org anchor: `headerLineDate` for the
+    // degree-less program (date on the field header), `subLineDate` for a
+    // degreed entry (date on the institution sub-line). Either way the exemption
+    // keeps it merged into that line on re-parse, preserving the #302 cue.
     // JSON-Resume `education[]` source (#334): institution←institution,
     // studyType←degree, area←field. `endDate` carries the graduation date,
     // falling back to the lead `year` when only a single date was parsed;
@@ -539,18 +628,48 @@ export function buildAtsResumeModel(
         edu.coursework && edu.coursework.length > 0 ? edu.coursework : undefined,
     };
     if (!edu.degree && edu.field) {
-      const headerLine = [edu.field, eduDates].filter(Boolean).join("  ");
+      // Degree-less program: the field title leads the header, the graduation
+      // date flush-right on that same header line (the #302 inline-dated cue),
+      // institution alone on the sub-line.
+      if (rightAlignEduDate) {
+        return {
+          headerLine: edu.field,
+          headerLineDate: eduDates,
+          subLine: org || undefined,
+          bullets,
+          fields: eduFields,
+        };
+      }
       return {
-        headerLine,
+        headerLine: [edu.field, eduDates].filter(Boolean).join("  "),
         subLine: org || undefined,
         bullets,
         fields: eduFields,
       };
     }
-    const orgLine = [org, eduDates].filter(Boolean).join("  ");
+    if (degreeField) {
+      // Degreed entry: degree leads the header, "Institution · Location" on the
+      // sub-line. A range date draws flush-right on the sub-line; a single-token
+      // graduation year — or a range with no institution sub-line to anchor
+      // against — stays glued after a whitespace gap (as #291).
+      const rightAlign = rightAlignEduDate && Boolean(org);
+      return {
+        headerLine: degreeField,
+        subLine: rightAlign
+          ? org
+          : [org, eduDates].filter(Boolean).join("  ") || undefined,
+        subLineDate: rightAlign ? eduDates : undefined,
+        bullets,
+        fields: eduFields,
+      };
+    }
+    // Neither degree nor field: the org line leads the header; date flush-right
+    // on it (falling back to glued when the date is a single token / org empty).
+    if (org && rightAlignEduDate) {
+      return { headerLine: org, headerLineDate: eduDates, bullets, fields: eduFields };
+    }
     return {
-      headerLine: degreeField || orgLine || "Education",
-      subLine: degreeField ? orgLine || undefined : undefined,
+      headerLine: [org, eduDates].filter(Boolean).join("  ") || "Education",
       bullets,
       fields: eduFields,
     };
