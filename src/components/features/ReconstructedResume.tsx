@@ -76,7 +76,10 @@ import type {
 } from "../../hooks/useEditableParse.ts";
 import { parsedEntryKey } from "../../hooks/useEditableParse.ts";
 import { AddPill, RemoveButton, InlineBulletAdd } from "./ReconstructedAdd.tsx";
-import { buildProjectDates } from "../../lib/score/entry-dates.ts";
+import {
+  buildProjectDates,
+  splitAchievementType,
+} from "../../lib/score/entry-dates.ts";
 import {
   EducationSection,
   SkillsSection,
@@ -640,6 +643,38 @@ function ProjectsSection({
 }
 
 /**
+ * Read-only achievement header. Emphasizes ONLY the leading "type" label (e.g.
+ * "Patent", "Publication") when the title carries the canonical "Type ·
+ * description" shape, matching the Download PDF, which bolds just that run
+ * (#452). The rest of the header — description + year — renders regular weight.
+ * When there is no qualifying type segment the whole header stays bold, as the
+ * PDF keeps the whole line bold in that case.
+ */
+function AchievementHeader({
+  title,
+  year,
+  fallback,
+}: {
+  title?: string;
+  year?: string;
+  fallback: string;
+}) {
+  const split = title ? splitAchievementType(title) : null;
+  if (!split) {
+    return (
+      <h3 className="text-sm font-semibold text-content-primary">{fallback}</h3>
+    );
+  }
+  const tail = [split.rest, year].filter(Boolean).join(" · ");
+  return (
+    <h3 className="text-sm font-normal text-content-primary">
+      <span className="font-semibold">{split.type}</span>
+      {` · ${tail}`}
+    </h3>
+  );
+}
+
+/**
  * Achievements render as their OWN section (#96), mirroring ProjectsSection: a
  * title-led header + the same graded `ResumeBulletRow`s used everywhere else, so
  * achievement bullets are checked and flagged identically. Read-only — the edit
@@ -709,9 +744,11 @@ function AchievementsSection({
                     />
                   </div>
                 ) : (
-                  <h3 className="text-sm font-semibold text-content-primary">
-                    {header || "Untitled achievement"}
-                  </h3>
+                  <AchievementHeader
+                    title={achievement.title}
+                    year={achievement.year}
+                    fallback={header || "Untitled achievement"}
+                  />
                 )}
                 {added && (
                   <RemoveButton

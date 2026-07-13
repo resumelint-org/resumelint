@@ -31,7 +31,7 @@ import {
   groupBulletsByExperience,
   toBulletExperience,
 } from "../score/group-bullets.ts";
-import { buildProjectDates } from "../score/entry-dates.ts";
+import { buildProjectDates, splitAchievementType } from "../score/entry-dates.ts";
 import { isLoneDateRange } from "../heuristics/line-primitives.ts";
 import { projectDisplay } from "../heuristics/projections.ts";
 import { EMPHASIS_OPEN, EMPHASIS_CLOSE } from "./auto-bold-metrics.ts";
@@ -362,34 +362,26 @@ export function isDatedEntry(entry: {
   return Boolean(entry.start_date || entry.end_date);
 }
 
-/** Longest a leading achievement segment can be and still read as a "type"
- *  label ("Patent", "Publication", "Exit", "Best Paper Award") rather than a
- *  full sentence — guards against bolding an entire prose title that merely
- *  happens to carry a " · ". */
-const ACHIEVEMENT_TYPE_MAX_LEN = 28;
-
 /**
  * Build an achievement's header string, emphasizing ONLY the leading "type"
  * label (e.g. "Patent", "Publication") when the title carries the canonical
  * "Type · description" shape — the rest of the header stays regular weight.
  *
- * The type is the first `" · "`-delimited segment of `title`, kept only when it
- * is short enough to read as a label (see `ACHIEVEMENT_TYPE_MAX_LEN`). It is
- * wrapped in the renderer's PUA emphasis sentinels (`EMPHASIS_OPEN`/`CLOSE`) so
- * `drawEntry` draws just that run bold; the sentinels are stripped before
- * drawing, so the round-trip text is unchanged (display-only weight, #284/#425).
- * When there is no such type segment the header is returned plain (no
- * sentinels) and the caller keeps the whole line bold as before.
+ * The type run (see {@link splitAchievementType}) is wrapped in the renderer's
+ * PUA emphasis sentinels (`EMPHASIS_OPEN`/`CLOSE`) so `drawEntry` draws just that
+ * run bold; the sentinels are stripped before drawing, so the round-trip text is
+ * unchanged (display-only weight, #284/#425). When there is no such type segment
+ * the header is returned plain (no sentinels) and the caller keeps the whole line
+ * bold. The reconstructed-résumé view shares `splitAchievementType` so its header
+ * emphasizes the identical run (#452).
  */
 function buildAchievementHeader(
   title: string,
   year: string | undefined,
 ): { headerLine: string; emphasized: boolean } {
-  const idx = title.indexOf(" · ");
-  const type = idx >= 0 ? title.slice(0, idx).trim() : "";
-  if (idx >= 0 && type && type.length <= ACHIEVEMENT_TYPE_MAX_LEN) {
-    const rest = title.slice(idx + 3);
-    const emphasizedTitle = `${EMPHASIS_OPEN}${type}${EMPHASIS_CLOSE} · ${rest}`;
+  const split = splitAchievementType(title);
+  if (split) {
+    const emphasizedTitle = `${EMPHASIS_OPEN}${split.type}${EMPHASIS_CLOSE} · ${split.rest}`;
     return {
       headerLine: joinHeader([emphasizedTitle, year], " · "),
       emphasized: true,
