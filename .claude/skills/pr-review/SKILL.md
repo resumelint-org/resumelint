@@ -25,7 +25,8 @@ of `gh`/bash command-level bug that sank PR #390 (a `--json` flag that doesn't
 exist on `gh issue create`, a milestone name word-splitting on spaces, a `--dry-run`
 that wrote anyway). This skill wraps `/code-review` and adds those gates, plus the
 review *norms* (verdict must match findings; hardcoded colors + wrong component tier
-are blocking) and the safe `gh` posting path (no inline-line `422`).
+are blocking) and the posting path (**inline anchors where the finding lives**, body
+for the rest, one `422`-safe fallback).
 
 **Don't reimplement bug-finding** — delegate the generic pass to `/code-review` and
 spend the skill's effort on the resumelint-specific gates and the workflow.
@@ -228,27 +229,83 @@ second model's read is lost if the PR doesn't say which model read it. No
 `Co-Authored-By`, no session URL, no `🤖` badge — none of those belong in git or a
 PR body on a public repo (`CLAUDE.md` → **Hard rules**).
 
-Post as a single PR review with the matching event — **top-level body, not inline
-comments** (inline needs a diff-line that exists in the patch or it `422`s; the
-top-level body never does):
+**Anchor findings to the code by default.** A finding sitting in the body makes the
+author scroll and hunt for `regex.ts:512`; the same finding inline lands on the line
+they are about to change and threads with their reply. Anchor every finding you can;
+keep the body for the stance, the gate results, and findings that have no line to
+land on.
+
+**Split the findings.** For each one, ask: does it point at a line this PR *added or
+changed*? That's the only thing GitHub will anchor to.
+
+- **Anchorable** — the finding's line is a `+` line in the patch → inline comment.
+- **Body-only** — the finding is about *unchanged* code (a call path the diff newly
+  reaches, a caller it breaks), about a **missing** thing (no test, no guard), or
+  about the PR as a whole → body. Don't contort these onto a nearby `+` line; a
+  comment anchored to a line it isn't about is worse than a body reference.
+
+**Get the line numbers from the patch, not from your file reads.** A line number you
+remember from `Read` is a *file* line; GitHub wants the line as it exists on the
+diff's RIGHT side. They drift. Walk the hunk headers once and map each finding:
 
 ```bash
-# event flag: --request-changes | --approve | --comment
-gh pr review "$PR_NUM" --repo "$REPO" \
-  --request-changes \
-  --body-file /tmp/review.md
+gh api "repos/$REPO/pulls/$PR_NUM/files" --paginate \
+  --jq '.[] | {path: .filename, patch: .patch}'
 ```
 
-If a finding genuinely needs to anchor to a line, verify the line is in the diff
-first (`gh api repos/$REPO/pulls/$PR_NUM/files`) — otherwise keep it in the body
-with a `path:line` reference. In `--local` mode, print the review and stop.
+For each `@@ -a,b +c,d @@` hunk, the RIGHT-side line starts at `c` and increments on
+every ` ` (context) and `+` line, never on a `-`. The anchor must be a `+` line.
+
+**Post once, with the comments in the same review.** One API call carries the event,
+the body, and every inline comment — so the author gets one notification, not N:
+
+```bash
+# event: REQUEST_CHANGES | APPROVE | COMMENT  (must match the Step 5 verdict)
+cat > /tmp/review.json <<'JSON'
+{
+  "event": "REQUEST_CHANGES",
+  "body": "<the Step 6 markdown body>",
+  "comments": [
+    { "path": "src/lib/heuristics/regex.ts", "line": 512, "side": "RIGHT",
+      "body": "The compound tier is missing the `LEADING_BULLET_RE` guard …" }
+  ]
+}
+JSON
+gh api "repos/$REPO/pulls/$PR_NUM/reviews" --method POST --input /tmp/review.json
+```
+
+For a finding spanning a range, add `"start_line"` (with `"start_side": "RIGHT"`).
+
+**Don't fight a `422`.** A bad anchor rejects the *whole* review, and the usual cause
+is that the diff moved under you — the author pushed while you were reviewing. Do
+**not** re-derive line numbers and retry in a loop; that's how a review turns into a
+twenty-minute anchoring exercise. Instead, **once**:
+
+1. Re-run the `files` call. If the head SHA changed, the diff moved — say so, and
+   re-anchor against the new patch (the findings themselves usually still hold; the
+   *lines* moved).
+2. If it 422s again, **fall back to a body-only review** with the findings as
+   `path:line` references and post it. A posted body-only review beats a perfect
+   inline review that never lands.
+
+Pin the SHA you reviewed so a later reader knows what you read:
+
+```bash
+gh pr view "$PR_NUM" --repo "$REPO" --json headRefOid -q .headRefOid
+```
+
+In `--local` mode, print the review (body + the inline comments with their anchors)
+and stop.
 
 ### Step 7 — Report
 
 Print: the verdict + the rule that produced it, the finding counts
-(Blocking/Secondary/Nits), which gates ran vs were skipped, and the review URL (or
-"local only"). If any gate couldn't run (missing `pdftotext`, `fallow` not
-installed), say so — a skipped gate is not a passed gate.
+(Blocking/Secondary/Nits), **how many landed inline vs stayed in the body** (and why
+the body ones had no anchor), the head SHA reviewed, which gates ran vs were skipped,
+and the review URL (or "local only"). If any gate couldn't run (missing `pdftotext`,
+`fallow` not installed), say so — a skipped gate is not a passed gate. If you fell
+back to body-only after a `422`, say that too — the author should know the anchors
+were lost to a mid-review push, not to laziness.
 
 ## Rules
 
@@ -268,8 +325,14 @@ installed), say so — a skipped gate is not a passed gate.
   synthetic personas only; a real persona is Blocking. Gate 3a above is the whole
   check — a real area code + `555` exchange, and an OSS template's demo PDF is no
   exception.
-- **Post to the top-level body, never a phantom inline line** (avoids `422`). Confirm
-  before posting to a public PR.
+- **Anchor to the code, don't hedge into the body.** Every finding that lands on a
+  `+` line goes inline; the body carries the stance, the gates, and the findings with
+  no line to land on. Derive anchors from the patch hunks, never from a remembered
+  file line.
+- **One `422` is information, not a puzzle.** It almost always means the author pushed
+  mid-review. Re-anchor against the fresh patch once; if that fails, post body-only
+  and move on. Never loop on anchoring.
+- Confirm before posting to a public PR.
 - **Tune stance to the author** — historically complex/untested contributions get an
   extra-careful pass; don't relax the gates because a diff "looks" clean.
 - Pure `gh` + `git` + `npm`/`npx` — no external services, no machine-specific paths.
