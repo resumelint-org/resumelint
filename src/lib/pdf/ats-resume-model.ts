@@ -536,7 +536,23 @@ export function buildAtsResumeModel(
     const org = joinHeader([companyLocation, exp.team], " · ");
     const dateRange = experienceDateRange(exp);
     // Full one-line header: "Title · Company, Location · Team".
-    const headerText = joinHeader([title, org], " · ");
+    //
+    // #466 EMPTY-COMPANY BRANCH — when `company` is empty but `team` is set,
+    // the naive "Title · Team" middot join re-parses on the parser as a
+    // `Title · Company` shape and mis-labels the team as the company. Emit the
+    // team after a COMMA instead ("Title, Team"), so the parser's role-comma
+    // split correctly routes it back into `team` (case 3 in `mapTitleFirst`)
+    // and the `company === title` backstop clears the mirrored company on
+    // re-parse — round-tripping to the SAME empty-company entry we emitted
+    // from. No location edit path is affected (an empty-company role with a
+    // location can still emit `Title · Location` and re-parse via the
+    // existing bare-location-title-rescue in step 5 of `cleanFieldArtifacts`).
+    let headerText: string;
+    if (!exp.company?.trim() && exp.team?.trim() && !exp.location?.trim()) {
+      headerText = title ? `${title}, ${exp.team.trim()}` : exp.team.trim();
+    } else {
+      headerText = joinHeader([title, org], " · ");
+    }
     const bullets = resolveBullets(
       bulletsByIndex.get(expOffset + i),
       bulletOverrides,

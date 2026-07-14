@@ -124,6 +124,20 @@ function cityStartsWithCompanyText(city: string): boolean {
 const LOCALITY_SUFFIX_RE =
   /^(?:city|town|beach|springs?|heights|falls|hills|park|bay|harbou?r|grove|gardens?|valley|shores?)$/i;
 
+/** Closed-vocabulary corporate-name tails. A single-token Pass-D "city" that is
+ *  a common corporate suffix noun ("Deutsche Bank", "Cognizant Solutions",
+ *  "Acme Group") is the last word of the COMPANY, not a city — peeling it as
+ *  location would silently corrupt every multi-word company on a single-column
+ *  em-dash header (`Title — Multi-Word Company, Country`, #461). Mirrors
+ *  {@link LOCALITY_SUFFIX_RE}'s design: defer when the token matches — a false
+ *  negative leaves the string as company (recoverable via inline edit), whereas
+ *  the current false-positive silently steals the company's tail into location.
+ *  Deliberately closed-set (open-shape "single-word remnant looks wrong" would
+ *  over-correct: `Citi Bank` legitimately reduces to `Citi Bank`, and `Citi`
+ *  alone is a real company — a one-token-remnant rule would be unsafe.) */
+const COMPANY_TAIL_TOKENS_RE =
+  /^(?:Bank|Corp|Corporation|Group|Systems|Solutions|Technologies|Studios|Media|Software|Consulting|Partners|Ventures|Holdings|Industries|Financial|Health|Healthcare|Networks|Digital|Analytics|Labs|Ltd|LLC|Inc|GmbH|SA|PLC)$/i;
+
 /** Known multi-word US cities, for the space-delimited "…Company New York, ST"
  *  fold where the location is glued onto the company line with no comma before
  *  the city. Pass B's single-token city rule truncates such a city to its last
@@ -222,11 +236,40 @@ function stripLocationSuffix(s: string): {
     if (
       mSpaceIntl &&
       COUNTRY_GAZETTEER.has(mSpaceIntl[2].toLowerCase()) &&
-      !LOCALITY_SUFFIX_RE.test(mSpaceIntl[1])
+      !LOCALITY_SUFFIX_RE.test(mSpaceIntl[1]) &&
+      // #461 — Pass C's `cityStartsWithCompanyText` guard applies equally here:
+      // a legal suffix ("Inc.", "Ltd.") or an org acronym is company text carried
+      // past a company-internal comma, not a city. Adding this fixes the
+      // "…Ltd., Country" / "…Inc., Country" false-strip Pass C left for Pass D.
+      !cityStartsWithCompanyText(mSpaceIntl[1]) &&
+      // #461 — a common corporate-name tail ("Bank", "Group", "Solutions") is the
+      // last word of the company, not a bare city — peeling it would silently
+      // corrupt every multi-word company on `Title — Multi-Word Company, Country`
+      // headers. Closed-vocabulary defer (see COMPANY_TAIL_TOKENS_RE).
+      !COMPANY_TAIL_TOKENS_RE.test(mSpaceIntl[1])
     ) {
       const before = stripDanglingSeparator(s.slice(0, mSpaceIntl.index));
       if (before)
         return { text: before, location: `${mSpaceIntl[1]}, ${mSpaceIntl[2]}` };
+    }
+
+    // Pass E — trailing-COUNTRY-ONLY strip (#461 follow-up). Fires when Passes
+    // A–D all deferred and the string still ends in `,\s*<Country>$` — the
+    // residual shape a corporate-tail deferral (Pass D) leaves behind. Example:
+    // "Deutsche Bank, India" — Pass D defers on "Bank" as a corporate tail
+    // (so the last company word isn't stolen), Pass E now peels the bare
+    // ", India" tail so company becomes "Deutsche Bank" and location surfaces
+    // as "India". Multi-word countries ("United Kingdom", "New Zealand") are
+    // admitted only through the closed COUNTRY_GAZETTEER — no open-shape
+    // regex — so a `Buyer, Home Goods` job-title tail (Home Goods not a
+    // country) is safe. Tried LAST so the richer city+country shapes above
+    // still win when they apply.
+    const COUNTRY_ONLY_RE =
+      /,\s*([A-Z][A-Za-z.\-]+(?:\s+[A-Z][A-Za-z.\-]+)*)$/;
+    const mCountry = s.match(COUNTRY_ONLY_RE);
+    if (mCountry && COUNTRY_GAZETTEER.has(mCountry[1].toLowerCase())) {
+      const before = stripDanglingSeparator(s.slice(0, mCountry.index));
+      if (before) return { text: before, location: mCountry[1] };
     }
   }
 
@@ -533,15 +576,86 @@ function mapTitleFirst(splits: Split[], anchorIdx: number | undefined): Fields {
     splits[1] !== undefined &&
     splits[0]?.via === "comma" &&
     splits[0]?.source === splits[1].source;
+  // Case 1 (#372) — anchor line is delim-split ("Company | Location Dates")
+  // BELOW the Title, Team comma-split. Company is the leading DELIM segment on
+  // the anchor line. Restricted to `via === "delim"` so an anchor-line
+  // comma-split (Title, Team ON the anchor row — cases 2/3 below) does NOT
+  // read its own title as the company via `anchorSplits[0]`.
   const anchorSplits =
     anchorIdx !== undefined ? splits.filter((s) => s.source === anchorIdx) : [];
+  const anchorDelimSplits = anchorSplits.filter((s) => s.via === "delim");
   const anchorCompany =
-    anchorSplits.length >= 2 && !looksLikeLocationTail(anchorSplits[0].text)
-      ? anchorSplits[0].text
+    anchorDelimSplits.length >= 2 &&
+    !looksLikeLocationTail(anchorDelimSplits[0].text)
+      ? anchorDelimSplits[0].text
       : undefined;
   if (isRoleCommaSplit && anchorCompany) {
     return { company: anchorCompany, title, team: splits[1]?.text };
   }
+  // The anchor line IS itself the Title, Team comma-split — the date sits on
+  // the same line as the comma-split header (cases 2/3 below), rather than on
+  // a separate delim-split line below it (case 1 above).
+  const anchorIsCommaSplit =
+    isRoleCommaSplit &&
+    anchorIdx !== undefined &&
+    splits[0]?.source === anchorIdx;
+  // Case 2 (#466) — anchor is Title, Team with dates on it; the real employer
+  // sits on a line BELOW the anchor, typically delim-split into
+  // "Company | Location [Dept]". Prefer the leading delim-split segment of the
+  // first below-anchor delim-split source as the company, and demote the
+  // post-comma splits[1] to team. Location is recovered downstream by
+  // `recoverLocation`'s step 3c (extended for below-anchor cells).
+  if (anchorIsCommaSplit) {
+    const belowDelimGroups = new Map<number, Split[]>();
+    for (const s of splits) {
+      if (s.source > anchorIdx && s.via === "delim") {
+        const arr = belowDelimGroups.get(s.source) ?? [];
+        arr.push(s);
+        belowDelimGroups.set(s.source, arr);
+      }
+    }
+    const sortedSources = [...belowDelimGroups.keys()].sort((a, b) => a - b);
+    for (const src of sortedSources) {
+      const group = belowDelimGroups.get(src)!;
+      if (group.length >= 2 && !looksLikeLocationTail(group[0].text)) {
+        return { company: group[0].text, title, team: splits[1]?.text };
+      }
+    }
+  }
+  // Case 3a (#466 follow-up) — anchor is Title, Team with no below-anchor
+  // employer, but the post-comma segment ITSELF reads as a corporate name
+  // (its last token is a common corporate-tail word — `Consulting`,
+  // `Financial`, `Ventures`, ...). Fixes the dogfooding regression where
+  // "Software Engineer, Ridgemont Consulting" fell into case 3, mirrored the
+  // title into company, then the backstop cleared it. `Consulting` isn't in
+  // COMPANY_SUFFIX_RE (broadening that regex breaks `looksLikeTitle`'s early
+  // return for `Software Engineer` / `Digital Product Manager`), so use
+  // COMPANY_TAIL_TOKENS_RE — the same closed vocabulary that gates Pass D's
+  // location deferral — here as a company-recognition signal. Distinct from
+  // case 3 (below): case 3 stays for genuinely suffix-less bare Title, Team
+  // banner continuations ("Senior Engineer, Payments Core") where the
+  // post-comma is a team, not a company.
+  if (anchorIsCommaSplit && splits[1]?.text) {
+    const lastToken = splits[1].text.trim().split(/\s+/).pop() ?? "";
+    if (COMPANY_TAIL_TOKENS_RE.test(lastToken)) {
+      return { company: splits[1].text, title, team: undefined };
+    }
+  }
+  // Case 3 (#382) — anchor is Title, Team on the same line as its date, with
+  // NO below-anchor employer line to draw from: a bare shared-banner
+  // continuation ("Senior Engineer, Payments Core Jul 2022 - Aug 2024"). The
+  // post-comma segment is a team/sub-org, not the employer. Keep it as `team`
+  // so `propagateSharedEmployer` (extract/experience.ts) can inherit the
+  // banner into `company`; mirror the title into `company` so
+  // `isBannerContinuation`'s `company === title` branch fires the same way it
+  // did before #466 gained the delim-only anchor restriction. If no banner is
+  // active, the `disambiguateCompanyTitle` end-of-pipeline backstop clears
+  // the mirrored company back to undefined so the miss reads as a miss.
+  if (anchorIsCommaSplit) {
+    return { company: title, title, team: splits[1]?.text };
+  }
+  // Case 4 — plain "Title, Company" over a bare date-only line below (#372's
+  // negative-regression contract): the post-comma segment IS the employer.
   return { company: splits[1]?.text, title, team: splits[2]?.text };
 }
 
@@ -722,17 +836,45 @@ function recoverLocation(
   //      reached a field. Scan the anchor line's non-company segments; if one
   //      yields a bare location once the date range is peeled, use it (and clear
   //      the segment from `team` if it landed there).
+  //
+  //      #466 EXTENSION — also scan below-anchor DELIM segments for a location.
+  //      The Title,Team + next-line employer shape ("SE II, Payments Platform
+  //      Aug 2024 - Present" / "Globex Financial | Chicago, IL  Dept") lands the
+  //      city on the employer line, not the anchor. Below-anchor delim cells are
+  //      structurally identical to the anchor-line delim cell #373 recovers
+  //      from, so the same `locationFromAnchorCell` guard applies. A
+  //      column-gap-folded "City, ST  Dept" cell is additionally split on 2+
+  //      spaces so the location cell is reached inside a delim-split segment
+  //      that couldn't cleanly separate the columns.
   if (!location && anchorIdx !== undefined) {
     for (const s of splits) {
+      // Anchor-line cells (existing behavior) OR below-anchor delim cells (#466).
+      const isAnchorCell = s.source === anchorIdx;
+      const isBelowDelim = s.source > anchorIdx && s.via === "delim";
+      if (!isAnchorCell && !isBelowDelim) continue;
       // Skip the company and the title cells: a location cell that landed in
       // `title` is the empty-title "Company · City, ST" export shape, which
       // step 5 rescues correctly (title → "", location set) — claiming it here
       // would set `location` and block that rescue, orphaning the location in
       // `title`. Only an unused/team location cell is claimed here.
-      if (s.source !== anchorIdx || s.text === company || s.text === title) {
-        continue;
+      if (s.text === company || s.text === title) continue;
+      let loc = locationFromAnchorCell(s.text);
+      if (!loc && isBelowDelim) {
+        // Column-gap fold: a "City, ST  Dept" cell where the delim regex
+        // couldn't split the columns because only a `\s{2,}` gap separates
+        // them. Split on the column gap and check each part.
+        const parts = s.text
+          .split(/\s{2,}/)
+          .map((p) => p.trim())
+          .filter((p) => p.length > 0);
+        for (const p of parts) {
+          const c = locationFromAnchorCell(p);
+          if (c) {
+            loc = c;
+            break;
+          }
+        }
       }
-      const loc = locationFromAnchorCell(s.text);
       if (loc) {
         location = loc;
         if (team === s.text) team = undefined;
@@ -873,5 +1015,16 @@ export function disambiguateCompanyTitle(
   const mapped = mapSegmentsToFields(splits, strip.filtered, strip.anchorIdx);
   const located = recoverLocation(mapped, splits, strip.anchorIdx);
   const cleaned = cleanFieldArtifacts(located);
-  return applyTrailingCompanyGuard(cleaned, strip.leadsFreshEntry);
+  const guarded = applyTrailingCompanyGuard(cleaned, strip.leadsFreshEntry);
+  // #466 backstop — a `company` byte-identical to `title` is never correct: it
+  // means an upstream branch mirrored the title into the company slot when no
+  // real employer signal was found. Clear it so the miss reads as a miss
+  // (blank company, recoverable via inline edit) rather than as bad data the
+  // user has to notice. Cheap and precise: exact-equality only, so a
+  // legitimately similar name ("Software Inc." title in a "Software Inc."
+  // company slot — vanishingly rare) is the only theoretical hit.
+  if (guarded.company && guarded.company === guarded.title) {
+    return { ...guarded, company: undefined };
+  }
+  return guarded;
 }

@@ -411,3 +411,43 @@ describe("matchSectionHeader — leading decorative glyph (#414)", () => {
     expect(matchSectionHeader("¥ proficient in typescript and go")).toBeNull();
   });
 });
+
+describe("matchSectionHeader — compound X & Y headers (#462)", () => {
+  it("routes 'Certifications & Activities' to certifications (left-side wins)", () => {
+    expect(matchSectionHeader("Certifications & Activities")).toBe(
+      "certifications",
+    );
+    expect(matchSectionHeader("CERTIFICATIONS & ACTIVITIES")).toBe(
+      "certifications",
+    );
+  });
+
+  it("routes 'X and Y' word-form to the left side's section", () => {
+    expect(matchSectionHeader("Certifications and Activities")).toBe(
+      "certifications",
+    );
+  });
+
+  it("falls through to the right side when the left side is not an alias", () => {
+    // "Personal" is not an alias; "achievements" is — the compound router
+    // takes the RIGHT side once the left fails.
+    expect(matchSectionHeader("Personal Achievements")?.toString() ?? null).toBe(
+      "achievements",
+    );
+  });
+
+  it("keeps existing 'awards & honors' behavior (achievements, either tier)", () => {
+    // Was pre-#462 covered by explicit compound aliases in sections.config.json;
+    // now the compound router alone would also route it. Behavior unchanged.
+    expect(matchSectionHeader("Awards & Honors")).toBe("achievements");
+    expect(matchSectionHeader("Honors & Awards")).toBe("achievements");
+  });
+
+  it("routes 'Skills & Interests' to skills (left side wins over 'other')", () => {
+    expect(matchSectionHeader("Skills & Interests")).toBe("skills");
+  });
+
+  it("does not mint a section when neither side is an alias", () => {
+    expect(matchSectionHeader("Head Coach & Assistant")).toBeNull();
+  });
+});

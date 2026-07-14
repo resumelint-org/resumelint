@@ -72,3 +72,51 @@ describe("'Title, Team' over 'Company | Location Dates' (#372)", () => {
     expect(role.company).toBe("Nod Publishing");
   });
 });
+
+describe("'Title, Team [dates]' over 'Company | Location' below-anchor employer (#466)", () => {
+  it("takes the company from the below-anchor delim-split and demotes post-comma to team", () => {
+    // The anchor line is the "Title, Team [dates]" comma-split itself. Neither
+    // the title, the team, nor the employer carries a company-suffix, so the
+    // parser falls into `mapTitleFirst`. Pre-#466 the anchor-line comma-split's
+    // first segment was mirrored into `company`; post-#466, the leading
+    // delim-split of the line BELOW the anchor is the company.
+    const roles = roleFromSection([
+      { text: "Experience", fontSize: 13 },
+      {
+        text: "Software Engineer II, Payments Platform Aug 2024 - Present",
+        fontSize: 11,
+      },
+      { text: "Wingtip Financial | Chicago, IL", fontSize: 11 },
+      { text: "• Owned the settlement rails.", fontSize: 11 },
+    ]);
+    expect(roles.length).toBeGreaterThanOrEqual(1);
+    const role = roles[0];
+
+    expect(role.title).toBe("Software Engineer II");
+    expect(role.company).toBe("Wingtip Financial");
+    expect(role.team).toBe("Payments Platform");
+    expect(role.location).toBe("Chicago, IL");
+  });
+
+  it("company is never byte-equal to title (#466 backstop)", () => {
+    // Anchor line IS the "Title, Team [dates]" comma-split itself, with NO
+    // below-anchor employer line — the exact shape where pre-#466 the parser
+    // mirrored the title into `company`. The end-of-pipeline
+    // `company === title` backstop clears it so the miss reads honestly as
+    // empty (parse1 has `company === ""`) rather than as bad data.
+    const roles = roleFromSection([
+      { text: "Experience", fontSize: 13 },
+      {
+        text: "Product Analyst, Growth Insights  Jul 2021 - Present",
+        fontSize: 11,
+      },
+      { text: "• Ran the growth experimentation program.", fontSize: 11 },
+    ]);
+    const role = roles[0];
+    expect(role.title).toContain("Product Analyst");
+    // The critical invariant: company is never byte-equal to title.
+    expect(role.company).not.toBe(role.title);
+    // The post-comma segment lands in `team`, so it's still recoverable.
+    expect(role.team).toBe("Growth Insights");
+  });
+});
