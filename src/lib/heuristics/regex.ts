@@ -509,14 +509,25 @@ export function matchSectionHeaderDetailed(
   // recognized as an L1 exact-alias match rather than a softer L2 anchor match
   // — the tier flag matters for the `isInstitutionRepeat` suppression logic in
   // sections.ts.
-  const compound = /^(.+?)\s+(?:&|and)\s+(.+)$/.exec(normalized);
-  if (compound) {
-    for (const side of [compound[1].trim(), compound[2].trim()]) {
-      for (const [name, keywords] of Object.entries(SECTION_KEYWORDS) as Array<
-        [SectionName, readonly string[]]
-      >) {
-        if (keywords.includes(side))
-          return { section: name, viaAnchorFallback: false };
+  //
+  // Bullet guard (post-review): trailing `[:·•]` normalization strips only the
+  // TAIL, so a LEADING `•` survives into `normalized`. The left side then
+  // carries the bullet and fails the alias table, but the right side hits any
+  // single-word alias (`leadership`, `volunteer`, `activities`, `honors`,
+  // `interests`, `projects`) — so a plain bullet line like
+  // "• Public speaking and leadership" would open an `experience` section
+  // mid-body. Mirror the exact same `!LEADING_BULLET_RE.test(text)` guard the
+  // adjacent tiers use.
+  if (!LEADING_BULLET_RE.test(text)) {
+    const compound = /^(.+?)\s+(?:&|and)\s+(.+)$/.exec(normalized);
+    if (compound) {
+      for (const side of [compound[1].trim(), compound[2].trim()]) {
+        for (const [name, keywords] of Object.entries(SECTION_KEYWORDS) as Array<
+          [SectionName, readonly string[]]
+        >) {
+          if (keywords.includes(side))
+            return { section: name, viaAnchorFallback: false };
+        }
       }
     }
   }

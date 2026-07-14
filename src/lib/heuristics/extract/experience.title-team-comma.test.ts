@@ -119,4 +119,55 @@ describe("'Title, Team [dates]' over 'Company | Location' below-anchor employer 
     // The post-comma segment lands in `team`, so it's still recoverable.
     expect(role.team).toBe("Growth Insights");
   });
+
+  it("case 3a promotes when the post-comma ends in a LEGAL-ENTITY marker (PR #483 review)", () => {
+    // "Software Engineer, Ridgemont Holdings" ends in `Holdings` — an
+    // unambiguous legal-entity marker in the narrowed COMPANY_LEGAL_TAIL_RE
+    // vocab. Promote to company; team is undefined; no mirror + backstop.
+    const roles = roleFromSection([
+      { text: "Experience", fontSize: 13 },
+      {
+        text: "Software Engineer, Ridgemont Holdings  Aug 2022 - Present",
+        fontSize: 11,
+      },
+      { text: "• Owned the analytics service.", fontSize: 11 },
+    ]);
+    const role = roles[0];
+    expect(role.title).toBe("Software Engineer");
+    expect(role.company).toBe("Ridgemont Holdings");
+    expect(role.team).toBeUndefined();
+  });
+
+  it("case 3a does NOT fire on team-shape post-comma like 'Growth Analytics' (PR #483 review)", () => {
+    // The pre-narrowing broad vocab promoted `Growth Analytics` to company
+    // and dropped `team`, which then blocked the #382 shared-employer banner
+    // from being inherited (isBannerContinuation early-returns on !team).
+    // The narrowed COMPANY_LEGAL_TAIL_RE excludes `Analytics`, so the role
+    // falls to case 3 (mirror + backstop) and the banner propagator inherits
+    // the shared employer correctly.
+    const roles = roleFromSection([
+      { text: "Experience", fontSize: 13 },
+      { text: "Wingtip Financial Inc.", fontSize: 11 },
+      {
+        text: "Staff Engineer, Platform Infrastructure  Aug 2024 - Present",
+        fontSize: 11,
+      },
+      { text: "• Led the platform reliability program.", fontSize: 11 },
+      {
+        text: "Senior Engineer, Growth Analytics  Jul 2022 - Aug 2024",
+        fontSize: 11,
+      },
+      { text: "• Built the growth-experiment platform.", fontSize: 11 },
+    ]);
+    expect(roles).toHaveLength(2);
+    // Role 1 anchors the banner directly.
+    expect(roles[0].company).toBe("Wingtip Financial Inc.");
+    expect(roles[0].team).toBe("Platform Infrastructure");
+    // Role 2's `Growth Analytics` MUST stay as team (not promoted to company),
+    // so the banner propagator finds !entry.team=false → isBannerContinuation
+    // considers it → inherits `Wingtip Financial Inc.` as company.
+    expect(roles[1].company).toBe("Wingtip Financial Inc.");
+    expect(roles[1].team).toBe("Growth Analytics");
+    expect(roles[1].title).toBe("Senior Engineer");
+  });
 });

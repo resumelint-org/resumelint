@@ -538,18 +538,25 @@ export function buildAtsResumeModel(
     // Full one-line header: "Title · Company, Location · Team".
     //
     // #466 EMPTY-COMPANY BRANCH — when `company` is empty but `team` is set,
-    // the naive "Title · Team" middot join re-parses on the parser as a
-    // `Title · Company` shape and mis-labels the team as the company. Emit the
-    // team after a COMMA instead ("Title, Team"), so the parser's role-comma
-    // split correctly routes it back into `team` (case 3 in `mapTitleFirst`)
-    // and the `company === title` backstop clears the mirrored company on
-    // re-parse — round-tripping to the SAME empty-company entry we emitted
-    // from. No location edit path is affected (an empty-company role with a
-    // location can still emit `Title · Location` and re-parse via the
-    // existing bare-location-title-rescue in step 5 of `cleanFieldArtifacts`).
+    // the naive "Title · Team" middot join re-parses as a `Title · Company`
+    // shape and mis-labels the team as the company. Emit the team after a
+    // COMMA instead ("Title, Team"), so the parser's role-comma split routes
+    // it back into `team` (case 3 in `mapTitleFirst`) and the
+    // `company === title` backstop clears the mirrored company on re-parse.
+    //
+    // When location is ALSO set (PR #483 review), the pre-fix else-branch
+    // emitted "Title · Location · Team" which re-parsed with `location` in the
+    // `company` slot and `location` lost entirely — same corruption class as
+    // the empty-company case. Route the location onto a SEPARATE `subLine`
+    // ("City, ST" on its own row below the header): `parseEntryBlocks`
+    // captures it as a below-anchor whole cell, and `recoverLocation` step 3c
+    // (extended in this PR for whole-cell below-anchor bare locations)
+    // surfaces it back into `location`.
     let headerText: string;
-    if (!exp.company?.trim() && exp.team?.trim() && !exp.location?.trim()) {
+    let emptyCompanySubLine: string | undefined;
+    if (!exp.company?.trim() && exp.team?.trim()) {
       headerText = title ? `${title}, ${exp.team.trim()}` : exp.team.trim();
+      if (exp.location?.trim()) emptyCompanySubLine = exp.location.trim();
     } else {
       headerText = joinHeader([title, org], " · ");
     }
@@ -572,10 +579,17 @@ export function buildAtsResumeModel(
     // exemption keeps it merged into the header `PdfLine` on re-parse); a
     // single-token date (or none) glues after a whitespace gap.
     if (headerText && isLoneDateRange(dateRange)) {
-      return { headerLine: headerText, headerLineDate: dateRange, bullets, fields };
+      return {
+        headerLine: headerText,
+        headerLineDate: dateRange,
+        ...(emptyCompanySubLine ? { subLine: emptyCompanySubLine } : {}),
+        bullets,
+        fields,
+      };
     }
     return {
       headerLine: [headerText, dateRange].filter(Boolean).join("  ") || "Experience",
+      ...(emptyCompanySubLine ? { subLine: emptyCompanySubLine } : {}),
       bullets,
       fields,
     };

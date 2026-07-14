@@ -509,9 +509,14 @@ function looksLikeBodyParagraph(text: string): boolean {
   const t = text.trim();
   if (!t) return false;
   if (/[.!?]$/.test(t)) return true;
-  if (t.length > 60) return true;
+  // Length branch (PR #483 review): same `!t.includes(",")` CSV exemption as
+  // the verb-led branch below. A realistic tech-stack subtitle like
+  // "React, TypeScript, Tailwind CSS, Node.js, PostgreSQL, Redis, Docker"
+  // is 67 chars but obviously a header continuation, not body prose — the
+  // CSV pattern is the tell.
+  if (t.length > 60 && !t.includes(",")) return true;
   const verbLed =
-    /^(?:Built|Designed|Implemented|Developed|Led|Architected|Optimi[sz]ed|Refactored|Deployed|Prototyped|Migrated|Automated|Delivered|Created|Engineered|Shipped|Wrote|Authored|Reduced|Improved|Increased|Launched|Ran|Built)\b/i.test(
+    /^(?:Built|Designed|Implemented|Developed|Led|Architected|Optimi[sz]ed|Refactored|Deployed|Prototyped|Migrated|Automated|Delivered|Created|Engineered|Shipped|Wrote|Authored|Reduced|Improved|Increased|Launched|Ran)\b/i.test(
       t,
     );
   if (verbLed && !t.includes(",")) return true;

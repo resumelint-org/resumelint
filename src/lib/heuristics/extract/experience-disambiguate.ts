@@ -138,6 +138,28 @@ const LOCALITY_SUFFIX_RE =
 const COMPANY_TAIL_TOKENS_RE =
   /^(?:Bank|Corp|Corporation|Group|Systems|Solutions|Technologies|Studios|Media|Software|Consulting|Partners|Ventures|Holdings|Industries|Financial|Health|Healthcare|Networks|Digital|Analytics|Labs|Ltd|LLC|Inc|GmbH|SA|PLC)$/i;
 
+/** Unambiguous LEGAL-ENTITY markers — a strictly narrower closed vocabulary
+ *  than {@link COMPANY_TAIL_TOKENS_RE}, used by `mapTitleFirst` case 3a to
+ *  PROMOTE a post-comma segment to `company`. Rationale (PR #483 review): a
+ *  DEFERRAL vocab where a false positive is harmless can be broad; a
+ *  PROMOTION vocab where a false positive destroys the team AND blocks the
+ *  #382 shared-employer banner from being inherited must be strict. Generic
+ *  team-name tails (`Systems`, `Analytics`, `Financial`, `Health`, `Media`,
+ *  `Digital`, `Labs`, `Solutions`, `Networks`, `Group`) are deliberately
+ *  excluded — they legitimately end team names like `Core Systems`,
+ *  `Growth Analytics`, `Consumer Health`, `Payments Digital`. */
+const COMPANY_LEGAL_TAIL_RE =
+  /^(?:Inc\.?|LLC|L\.L\.C\.?|Ltd\.?|GmbH|PLC|Corp\.?|Corporation|Holdings)$/i;
+
+/** Trailing "…, <Country>$" strip used by {@link stripLocationSuffix}'s Pass E
+ *  (#461 follow-up). Module-scope so it's built once, matching the siblings
+ *  {@link LOCALITY_SUFFIX_RE} / {@link COMPANY_TAIL_TOKENS_RE} /
+ *  {@link COMPANY_LEGAL_TAIL_RE}. The captured group must additionally match
+ *  the closed COUNTRY_GAZETTEER at the call site — the regex alone is
+ *  intentionally shape-only. */
+const COUNTRY_ONLY_RE =
+  /,\s*([A-Z][A-Za-z.\-]+(?:\s+[A-Z][A-Za-z.\-]+)*)$/;
+
 /** Known multi-word US cities, for the space-delimited "…Company New York, ST"
  *  fold where the location is glued onto the company line with no comma before
  *  the city. Pass B's single-token city rule truncates such a city to its last
@@ -263,9 +285,8 @@ function stripLocationSuffix(s: string): {
     // admitted only through the closed COUNTRY_GAZETTEER — no open-shape
     // regex — so a `Buyer, Home Goods` job-title tail (Home Goods not a
     // country) is safe. Tried LAST so the richer city+country shapes above
-    // still win when they apply.
-    const COUNTRY_ONLY_RE =
-      /,\s*([A-Z][A-Za-z.\-]+(?:\s+[A-Z][A-Za-z.\-]+)*)$/;
+    // still win when they apply. `COUNTRY_ONLY_RE` is hoisted to module scope
+    // (PR #483 review) for consistency with its siblings.
     const mCountry = s.match(COUNTRY_ONLY_RE);
     if (mCountry && COUNTRY_GAZETTEER.has(mCountry[1].toLowerCase())) {
       const before = stripDanglingSeparator(s.slice(0, mCountry.index));
@@ -623,21 +644,27 @@ function mapTitleFirst(splits: Split[], anchorIdx: number | undefined): Fields {
     }
   }
   // Case 3a (#466 follow-up) — anchor is Title, Team with no below-anchor
-  // employer, but the post-comma segment ITSELF reads as a corporate name
-  // (its last token is a common corporate-tail word — `Consulting`,
-  // `Financial`, `Ventures`, ...). Fixes the dogfooding regression where
-  // "Software Engineer, Ridgemont Consulting" fell into case 3, mirrored the
-  // title into company, then the backstop cleared it. `Consulting` isn't in
-  // COMPANY_SUFFIX_RE (broadening that regex breaks `looksLikeTitle`'s early
-  // return for `Software Engineer` / `Digital Product Manager`), so use
-  // COMPANY_TAIL_TOKENS_RE — the same closed vocabulary that gates Pass D's
-  // location deferral — here as a company-recognition signal. Distinct from
-  // case 3 (below): case 3 stays for genuinely suffix-less bare Title, Team
-  // banner continuations ("Senior Engineer, Payments Core") where the
-  // post-comma is a team, not a company.
+  // employer, but the post-comma segment ITSELF ends in an unambiguous
+  // legal-entity marker (`Inc.`, `LLC`, `Ltd.`, `GmbH`, `PLC`, `Corp.`,
+  // `Corporation`, `Holdings`). Fixes the dogfooding case where
+  // "Software Engineer, Ridgemont Holdings" fell into case 3, mirrored the
+  // title into company, then the backstop cleared it.
+  //
+  // Post-review narrowing (PR #483): the earlier version of this branch reused
+  // `COMPANY_TAIL_TOKENS_RE` — a DEFERRAL vocabulary where a false positive is
+  // harmless (Pass D just leaves the string as company). Here a false positive
+  // is DESTRUCTIVE: it promotes team to company and clears team, and
+  // `isBannerContinuation` (extract/experience.ts) then early-returns on the
+  // missing team so the shared-banner employer never inherits either. That
+  // regressed shapes like "Senior Engineer, Growth Analytics" under a
+  // `Wingtip Financial Inc.` banner — three fields worse than main. The two
+  // decisions need different vocabularies: use closed legal-entity markers
+  // here (unambiguous employer signal), leave the broader Pass D deferral
+  // vocab alone. Case 3 below still handles the generic post-comma-is-team
+  // shape and lets the banner propagator inherit correctly.
   if (anchorIsCommaSplit && splits[1]?.text) {
     const lastToken = splits[1].text.trim().split(/\s+/).pop() ?? "";
-    if (COMPANY_TAIL_TOKENS_RE.test(lastToken)) {
+    if (COMPANY_LEGAL_TAIL_RE.test(lastToken)) {
       return { company: splits[1].text, title, team: undefined };
     }
   }
@@ -846,12 +873,26 @@ function recoverLocation(
   //      column-gap-folded "City, ST  Dept" cell is additionally split on 2+
   //      spaces so the location cell is reached inside a delim-split segment
   //      that couldn't cleanly separate the columns.
+  //
+  //      PR #483 review — also scan below-anchor WHOLE cells (a bare "City, ST"
+  //      line on its own, no delimiters). This is the shape the exporter emits
+  //      for an empty-company role with a location (see the `emptyCompanySubLine`
+  //      branch in ats-resume-model.ts) — the subLine renders `City, ST` on its
+  //      own row below `Title, Team [Dates]`, and buildEntryBlock pushes it into
+  //      `belowHeaderLines` as a `via: "whole"` split. Without this branch the
+  //      subLine content was captured into headerLines but not surfaced as
+  //      `location`, breaking round-trip on empty-company + location roles.
   if (!location && anchorIdx !== undefined) {
     for (const s of splits) {
-      // Anchor-line cells (existing behavior) OR below-anchor delim cells (#466).
+      // Anchor-line cells (existing behavior), OR below-anchor delim cells
+      // (#466), OR below-anchor whole cells that read as a bare location.
       const isAnchorCell = s.source === anchorIdx;
       const isBelowDelim = s.source > anchorIdx && s.via === "delim";
-      if (!isAnchorCell && !isBelowDelim) continue;
+      const isBelowWholeLoc =
+        s.source > anchorIdx &&
+        s.via === "whole" &&
+        isBareLocationString(s.text);
+      if (!isAnchorCell && !isBelowDelim && !isBelowWholeLoc) continue;
       // Skip the company and the title cells: a location cell that landed in
       // `title` is the empty-title "Company · City, ST" export shape, which
       // step 5 rescues correctly (title → "", location set) — claiming it here
