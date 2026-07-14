@@ -87,7 +87,7 @@ def main() -> None:
             PREFIX,
             f"`src/{rel_str}` is missing the SPDX header. Prepend:\n"
             f"{SPDX_HEADER}"
-            f"See CLAUDE.md \"Exemplars\"; license rationale in "
+            f"\nSee CLAUDE.md \"Exemplars\"; license rationale in "
             f"docs/CONTRIBUTING-PROCESS.md.",
         )
 

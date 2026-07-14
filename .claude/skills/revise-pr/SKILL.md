@@ -203,8 +203,10 @@ body, edit the block, write it back:
 
 ```bash
 body="$(gh pr view "$PR_NUM" --repo "$REPO" --json body -q .body)"
-# if it contains '## Provenance', rewrite that block with the added row;
-# only if it does NOT, append a fresh block.
+# You must write the text-replacement logic (e.g. awk/python) to define updated_body.
+# If it contains '## Provenance', append the new row to that block.
+# If it does NOT, append a fresh block.
+updated_body="..."
 gh pr edit "$PR_NUM" --repo "$REPO" --body-file -   <<<"$updated_body"
 ```
 

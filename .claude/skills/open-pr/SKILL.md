@@ -256,14 +256,15 @@ resolved (an externally-run reviewer, a hand-edit), state what's true
 honest; a fabricated one is worse than none.
 
 If the body already contains a `## Provenance` marker (a re-run, a resumed
-batch), **update it in place — never append a second block**:
+batch), **update it in place (if present) or append a new block (if missing) — never append a second block**:
 
 ```bash
 body="$(gh pr view "$PR_NUM" --repo "$REPO" --json body -q .body)"
-if ! grep -qF '## Provenance' <<<"$body"; then
-  printf '%s\n\n%s\n' "$body" "$PROVENANCE_MD" \
-    | gh pr edit "$PR_NUM" --repo "$REPO" --body-file -
-fi
+# You must write text-replacement logic (e.g. awk/python) to define updated_body.
+# If it contains '## Provenance', update the block in place.
+# If it does NOT, append the new block to the body.
+updated_body="..."
+gh pr edit "$PR_NUM" --repo "$REPO" --body-file - <<<"$updated_body"
 ```
 
 ### Step 6: Report
