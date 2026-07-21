@@ -22,6 +22,33 @@ describe("tokenizeSkillLine", () => {
     expect(result).not.toContain("CSS");
   });
 
+  it("splits on inline round/square bullet glyphs incl. ● U+25CF (not just • U+2022)", () => {
+    // Word / Google-Docs commonly separate inline skills with a `●` BLACK CIRCLE
+    // (U+25CF), a different codepoint from the `•` BULLET (U+2022) the splitter
+    // already handled — so `Python ● SQL ● Docker` used to come back as ONE
+    // merged token carrying two literal `●` glyphs (which then rewrote to `?` on
+    // the Download-PDF round-trip via the WinAnsi sanitizer).
+    const result = tokenizeSkillLine("Python ● SQL ● Docker ● Kubernetes");
+    expect(result).toEqual(["Python", "SQL", "Docker", "Kubernetes"]);
+    // The sibling bullet glyphs from the canonical set split too.
+    expect(tokenizeSkillLine("Go ‣ Rust ▪ Scala ◦ Elixir")).toEqual([
+      "Go",
+      "Rust",
+      "Scala",
+      "Elixir",
+    ]);
+  });
+
+  it("does NOT split a hyphenated skill name on its dash", () => {
+    // The dash glyphs are excluded from the bullet-separator set precisely so a
+    // real hyphenated skill survives whole.
+    expect(tokenizeSkillLine("CI-CD, front-end, back-end")).toEqual([
+      "CI-CD",
+      "front-end",
+      "back-end",
+    ]);
+  });
+
   it("strips an inline Label: prefix before tokenizing", () => {
     // The full line as it would appear in the PDF — label is NOT pre-stripped.
     // SKILL_SPLIT_RE splits on comma/semicolon, so the actual tokens are:
